@@ -245,7 +245,7 @@ function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperatu
             <Fact label="Issuer" value={scenario.source} />
             <Fact label="Operation" value={scenario.command.operation} mono />
             <Fact label="Target" value="Store 184 / Chilled 03" />
-            {scenario.command.value !== null && <Fact label="Requested value" value={`${scenario.command.value}°C`} />}
+            {scenario.command.value !== null && <Fact label="Requested value" value={scenario.command.displayValue ?? `${scenario.command.value}°C`} />}
           </dl>
           <p>{scenario.summary}</p>
           {!running ? (
@@ -344,7 +344,7 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
           <dl>
             <Fact label="Mode" value={!running ? "Paused" : denied ? "Fail closed" : recovering ? "Recovery admission" : verifying ? "Checking authority" : allowed ? "Executing" : "Admission guard"} />
             <Fact label="Compressor" value={recovering ? "Recovery requested" : scenario.id === "compressor" && phase !== "monitoring" ? "Fault detected" : "Online"} />
-            <Fact label="Defrost" value={result?.scenario.id === "attack" && denied ? "Malicious request blocked" : "Scheduled only"} />
+            <Fact label="Defrost" value={result?.scenario.id === "valid-authority-attack" && result.decision === "allowed" ? "8-hour schedule accepted" : result?.scenario.id === "attack" && denied ? "Malicious request blocked" : "Scheduled only"} />
           </dl>
         </div>
       </div>
@@ -362,7 +362,7 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
 function DecisionTimeline({ ledger }) {
   return (
     <section className="timeline-panel">
-      <div className="timeline-heading"><div><span>Witness chain</span><h2>Decision timeline</h2></div><strong>{ledger.length} entries</strong></div>
+      <div className="timeline-heading"><div><span>Hash-linked evidence</span><h2>Decision timeline</h2></div><strong>{ledger.length} entries</strong></div>
       {ledger.length === 0 ? (
         <div className="empty-timeline"><Link2 size={19} /><span>Each submitted command will add a hash-linked decision entry.</span></div>
       ) : (
@@ -399,6 +399,7 @@ function DecisionPanel({ result, phase }) {
       <PanelHeading icon={allowed ? CheckCircle2 : XCircle} eyebrow="Admission decision" title={allowed ? "Allowed" : "Denied"} />
       <div className="decision-id"><span>Decision ID</span><strong>{result.evidence.decisionId}</strong></div>
       <p>{result.evidence.reason}</p>
+      {result.scenario.admissionNote && <div className="admission-limit"><TriangleAlert size={17} /><span>{result.scenario.admissionNote}</span></div>}
       <div className="execution-state">
         <span>Execution</span>
         <strong>{result.outcome ? "Completed in simulator" : "Not attempted"}</strong>
@@ -413,7 +414,7 @@ function ChecksPanel({ result, phase }) {
     ["Identity signature", checks?.identity],
     ["Public authority record", checks?.authority],
     ["Operation and resource scope", checks?.operationScope],
-    ["Current legitimacy reference", checks?.legitimacy],
+    ["Legitimacy reference present", checks?.legitimacy],
   ];
   return (
     <section className="panel checks-panel">
@@ -439,7 +440,7 @@ function EvidenceCard({ result }) {
           <Fact label="Command hash" value={shortHash(result.evidence.commandHash)} mono />
           <Fact label="Record" value={result.record?.recordId ?? "No matching record"} mono />
           <Fact label="Evidence hash" value={shortHash(result.evidence.evidenceHash)} mono />
-          <Fact label="Witness signer" value={shortHash(result.evidence.evidenceSigner)} mono />
+          <Fact label="Demo decision signer" value={shortHash(result.evidence.evidenceSigner)} mono />
           <Fact label="Outcome" value={result.outcome ? shortHash(result.outcome.outcomeHash) : "None — denied before execution"} mono={Boolean(result.outcome)} />
         </dl>
       )}
@@ -450,7 +451,7 @@ function EvidenceCard({ result }) {
 function AuthorityView() {
   return (
     <section className="page-view">
-      <PageHero eyebrow="Sovereign authority" title="One Domain. Four deliberately separate authorities." body="The monitoring service can observe and alert. Maintenance can dispatch. Only the site engineer controller can restore the safe setpoint. Knowing the right value never grants control authority." />
+      <PageHero eyebrow="Sovereign authority" title="One Domain. Five deliberately separate authorities." body="Monitoring can observe and alert. Maintenance can dispatch. Site control can restore a safe setpoint or change defrost duration only through its separately scoped authorities. Knowing the right value never grants control authority—and valid authority does not prove benign intent." />
       <div className="authority-summary">
         <section className="domain-card">
           <span>Domain</span><h2>Store 184 refrigeration</h2>
@@ -477,9 +478,9 @@ function AuthorityView() {
 function EvidenceView({ ledger, onRun }) {
   return (
     <section className="page-view">
-      <PageHero eyebrow="Incident evidence" title="A decision trail, not an editable story." body="Every command submitted through the trusted gateway creates signed decision evidence. Allowed commands add a separate simulator outcome, keeping admission distinct from execution." />
+      <PageHero eyebrow="Incident evidence" title="A decision trail, not an editable story." body="Every command submitted through the trusted gateway creates signed decision evidence. Allowed commands add a separate simulator outcome, keeping admission distinct from execution. The hosted path can add AgentEnvelope witness blocks and configured external verification." />
       {ledger.length === 0 ? (
-        <section className="large-empty"><DatabaseZap size={34} /><h2>No incident evidence yet</h2><p>Run one or more scenarios to build the local witness chain.</p><button type="button" onClick={onRun}>Open cold-chain run</button></section>
+        <section className="large-empty"><DatabaseZap size={34} /><h2>No incident evidence yet</h2><p>Run one or more scenarios to build the local hash-linked evidence chain.</p><button type="button" onClick={onRun}>Open cold-chain run</button></section>
       ) : (
         <div className="evidence-table-wrap">
           <table className="evidence-table">
@@ -488,12 +489,21 @@ function EvidenceView({ ledger, onRun }) {
           </table>
         </div>
       )}
-      <section className="evidence-boundary"><TriangleAlert size={21} /><div><strong>Evidence boundary</strong><p>A denied command proves the gateway rejected that submitted attempt. It cannot record a path that bypasses the gateway entirely. The controller must make verified admission its only command path.</p></div></section>
+      <div className="evidence-limitations">
+        <section className="evidence-boundary"><TriangleAlert size={21} /><div><strong>Command boundary</strong><p>A denied command proves the gateway rejected that submitted attempt. It cannot record a path that bypasses the gateway entirely.</p></div></section>
+        <section className="evidence-boundary"><RadioTower size={21} /><div><strong>Observation boundary</strong><p>This chain records what arrived. It does not prove that an expected temperature reading arrived on schedule; silence and a quiet night remain indistinguishable here.</p></div></section>
+        <section className="evidence-boundary"><UserRoundCheck size={21} /><div><strong>Hosted witness path</strong><p>This local run does not call hosted services. The implemented hosted path appends AE witness blocks, can send the AE head to AILeash for external custody, and can submit verified completed outcomes to MIR for checkpointed transparency. MIR does not receive denied decisions or custody the AE head.</p></div></section>
+      </div>
     </section>
   );
 }
 
 function SetupView() {
+  const ingressPaths = [
+    ["Internet", "Remote management"],
+    ["Contractor", "Protected service access"],
+    ["Provider", "Multi-store platform"],
+  ];
   const stages = [
     ["01", "Harden the controller", "Remove public management exposure, update supported firmware, replace end-of-life equipment, and require protected remote access."],
     ["02", "Create the Domain", "Project the store refrigeration Domain from a locally held Vault root. Hosted services never receive the root or derived private seeds."],
@@ -504,6 +514,23 @@ function SetupView() {
   return (
     <section className="page-view setup-view">
       <PageHero eyebrow="Deployment model" title="AgentEnvelope complements controller security." body="The demo models cryptographic command admission. It does not pretend to replace firmware maintenance, segmentation, firewalls, VPNs, physical safety controls or incident response." />
+      <section className="threat-model">
+        <div className="threat-copy">
+          <span>Ingress-independent authority</span>
+          <h2>Different routes. One command boundary.</h2>
+          <p>The incident's initial access route has not been established publicly. Whatever upstream path carries a request, it must meet the same identity and authority check before actuation.</p>
+        </div>
+        <div className="ingress-map" aria-label="Possible command paths converging on the AgentEnvelope gateway">
+          <div className="ingress-paths">
+            {ingressPaths.map(([name, detail]) => <div key={name}><strong>{name}</strong><small>{detail}</small></div>)}
+          </div>
+          <ArrowRight size={24} />
+          <div className="gateway-boundary"><LockKeyhole size={22} /><strong>AgentEnvelope gateway</strong><small>Verify · allow / deny · witness</small></div>
+          <ArrowRight size={24} />
+          <div className="controller-node"><ServerCog size={22} /><strong>Controller</strong><small>Operational actuation</small></div>
+        </div>
+        <p className="boundary-warning"><TriangleAlert size={18} /><span>The gateway must be the only operational command path. A route that actuates beneath or around it is outside the AgentEnvelope boundary.</span></p>
+      </section>
       <div className="setup-grid">{stages.map(([number, title, body]) => <article key={number}><span>{number}</span><div><h2>{title}</h2><p>{body}</p></div></article>)}</div>
       <section className="claim-box"><ShieldCheck size={26} /><div><span>The defensible claim</span><h2>Only commands carrying valid, scoped authority reach the simulated controller—and every submitted decision leaves cryptographic evidence.</h2></div></section>
     </section>

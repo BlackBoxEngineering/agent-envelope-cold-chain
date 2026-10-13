@@ -183,6 +183,8 @@ dd { margin: 0; text-align: right; font-size: 10px; color: #e7f5f5; }
 .decision-id span, .execution-state span { color: var(--muted); font-size: 9px; }
 .decision-id strong { font: 500 10px "DM Mono", monospace; }
 .execution-state strong { font-size: 9px; text-align: right; }
+.admission-limit { margin-top: 11px; padding: 10px; display: flex; align-items: start; gap: 8px; border: 1px solid rgba(240,184,93,.4); background: rgba(240,184,93,.08); color: #f4d39a; font-size: 9px; line-height: 1.5; }
+.admission-limit svg { color: var(--amber); flex: 0 0 auto; }
 .check-list { display: grid; gap: 7px; }
 .check-list > div { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 7px; padding: 8px; border: 1px solid var(--line); }
 .check-list span { font-size: 10px; }
@@ -226,10 +228,28 @@ dd { margin: 0; text-align: right; font-size: 10px; color: #e7f5f5; }
 .status-pill { padding: 4px 7px; text-transform: uppercase; font-size: 8px; border: 1px solid var(--line); }
 .status-pill.allowed { color: var(--green); border-color: rgba(103,215,160,.35); }
 .status-pill.denied { color: var(--red); border-color: rgba(255,115,123,.35); }
-.evidence-boundary { margin-top: 14px; padding: 17px; display: flex; gap: 12px; align-items: start; }
+.evidence-limitations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+.evidence-boundary { padding: 17px; display: flex; gap: 12px; align-items: start; }
 .evidence-boundary > svg { color: var(--amber); flex: 0 0 auto; }
 .evidence-boundary strong { font-size: 12px; }
 .evidence-boundary p { color: var(--muted); font-size: 10px; line-height: 1.6; margin: 4px 0 0; }
+.threat-model { margin-top: 34px; padding: 23px; border: 1px solid var(--line); background: rgba(10,24,29,.94); box-shadow: var(--shadow); }
+.threat-copy > span { color: var(--cyan); text-transform: uppercase; letter-spacing: .14em; font-size: 9px; font-weight: 800; }
+.threat-copy h2 { margin: 7px 0; font-size: 20px; }
+.threat-copy p { color: var(--muted); max-width: 760px; margin: 0; font-size: 11px; line-height: 1.65; }
+.ingress-map { display: grid; grid-template-columns: minmax(190px, 1fr) auto minmax(210px, 1fr) auto minmax(170px, .8fr); align-items: center; gap: 14px; margin-top: 22px; }
+.ingress-map > svg { color: var(--line-strong); }
+.ingress-paths { display: grid; gap: 7px; }
+.ingress-paths > div, .gateway-boundary, .controller-node { border: 1px solid var(--line-strong); background: rgba(255,255,255,.025); padding: 12px; }
+.ingress-paths strong, .ingress-paths small, .gateway-boundary strong, .gateway-boundary small, .controller-node strong, .controller-node small { display: block; }
+.ingress-paths strong, .gateway-boundary strong, .controller-node strong { font-size: 11px; }
+.ingress-paths small, .gateway-boundary small, .controller-node small { color: var(--muted); font-size: 9px; margin-top: 3px; }
+.gateway-boundary, .controller-node { min-height: 96px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+.gateway-boundary { border-color: rgba(49,197,210,.48); background: rgba(49,197,210,.08); }
+.gateway-boundary svg { color: var(--ice); margin-bottom: 8px; }
+.controller-node svg { color: var(--cyan); margin-bottom: 8px; }
+.boundary-warning { display: flex; align-items: start; gap: 9px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; margin: 18px 0 0; font-size: 10px; line-height: 1.55; }
+.boundary-warning svg { color: var(--amber); flex: 0 0 auto; }
 .setup-grid { display: grid; gap: 10px; margin-top: 38px; }
 .setup-grid article { display: grid; grid-template-columns: 54px 1fr; gap: 17px; padding: 20px; border-top: 1px solid var(--line); background: rgba(10,24,29,.55); }
 .setup-grid article > span { font: 500 20px "DM Mono", monospace; color: var(--cyan); }
@@ -269,6 +289,9 @@ footer { min-height: 42px; border-top: 1px solid var(--line); color: var(--muted
   .controller-rack { grid-column: auto; }
   .authority-summary { grid-template-columns: 1fr; }
   .authority-cards { grid-template-columns: 1fr; }
+  .evidence-limitations { grid-template-columns: 1fr; }
+  .ingress-map { grid-template-columns: 1fr; }
+  .ingress-map > svg { transform: rotate(90deg); justify-self: center; }
   .page-view { width: calc(100% - 22px); padding-top: 34px; }
 }
 
