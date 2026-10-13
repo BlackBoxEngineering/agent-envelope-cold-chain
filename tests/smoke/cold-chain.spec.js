@@ -42,17 +42,19 @@ test("runs continuously and automatically completes an authorised fault recovery
   await expect(page.locator(".timeline-panel li")).toHaveCount(2);
 });
 
-test("allows a compromised controller when its authority remains valid and in scope", async ({ page }) => {
+test("denies a known signer that attempts to exceed its exact authority", async ({ page }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: "Start system" }).click();
-  await page.getByRole("button", { name: /Valid authority attack/i }).click();
+  await page.getByRole("button", { name: /Scope breakout attempt/i }).click();
 
-  await expect(page.getByRole("heading", { name: "Allowed" })).toBeVisible();
-  await expect(page.locator(".check-list .pass")).toHaveCount(4);
-  await expect(page.getByText("8-hour schedule accepted")).toBeVisible();
-  await expect(page.getByText(/does not prove operator intent/i)).toBeVisible();
-  await expect(page.getByText("Completed in simulator")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Denied" })).toBeVisible();
+  await expect(page.locator(".check-list .pass")).toHaveCount(3);
+  await expect(page.getByText("authority.parameter_denied", { exact: true })).toBeVisible();
+  await expect(page.getByText("8-hour scope breakout blocked")).toBeVisible();
+  await expect(page.getByText(/authority cannot expand its own scope/i)).toBeVisible();
+  await expect(page.locator(".decision-panel").getByText(/duration:8h.*outside the immutable Action Envelope/i)).toBeVisible();
+  await expect(page.locator(".execution-state")).toContainText("Not attempted");
 });
 
 test("remains usable on a phone-sized viewport", async ({ page }) => {

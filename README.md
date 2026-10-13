@@ -50,7 +50,7 @@ The portal is used to create the cold-chain Domain and its Agent authorities:
 
 - **Temperature monitor** — may read temperatures and alert an engineer.
 - **Maintenance dispatch** — may dispatch an approved refrigeration contractor.
-- **Site engineer controller** — may restore a safe setpoint or change defrost duration through separately scoped authorities.
+- **Site engineer controller** — may restore the exact safe setpoint or run the exact one-hour defrost schedule through separately scoped authorities.
 
 Each Agent authority is bounded by its signed operation, resources, action limits and legitimacy reference.
 
@@ -72,7 +72,7 @@ API keys provide access to the hosted service. They are not authority.
 
 Press **Start system** to bring the refrigeration loop online and continuously report the temperature of Chilled Zone 03. Once it is live, each operational event is itself the trigger: select a compressor fault, an unauthorised 50°C defrost attempt or a legitimate command and watch the system respond without a second submission step.
 
-Each request pauses at the trusted gateway while its signature, public authority record and operation/resource scope are checked; the demo also shows whether a legitimacy reference is present. Rejected commands never reach the controller, but still leave signed decision evidence. A compressor fault progresses into a separately authorised site-engineer recovery, so the viewer can watch the safe setpoint return and see both decisions added to the linked evidence trail.
+Each request pauses at the AgentEnvelope gateway while its signature, public authority record and exact Action Envelope scope are checked; the demo also shows whether a legitimacy reference is present. The cold-chain integration canonically projects safety-relevant values into resources instead of trusting caller-supplied labels. AgentEnvelope admission then requires an exact match with the immutable Action Envelope. Rejected commands never reach the controller, but still leave signed decision evidence. A compressor fault progresses into a separately authorised site-engineer recovery, so the viewer can watch the safe setpoint return and see both decisions added to the linked evidence trail.
 
 ## Evidence, not arguments
 
@@ -127,7 +127,7 @@ The chain also records only what arrived. It does not prove that a temperature r
 - **50°C attack:** an unknown signer attempts forced high-temperature defrost. The command is denied and added to the local evidence chain.
 - **Correct, no authority:** a read-only monitor proposes the correct 4°C value but cannot issue a control command.
 - **Authorised recovery:** the site engineer restores the safe setpoint; admission and completion are recorded separately.
-- **Valid authority attack:** a compromised site-engineer controller submits an in-scope eight-hour defrost change. Every implemented authority check passes, so AgentEnvelope allows it and records the outcome. Authority verification does not prove benign intent or an uncompromised credential, and the current verifier does not consult external behaviour history.
+- **Scope breakout attempt:** a known site-engineer signer requests an eight-hour defrost cycle while presenting the permitted one-hour resource label. The command projects to `duration:8h`, which does not match its immutable `duration:1h` Action Envelope. AgentEnvelope accepts the identity and signature but denies the out-of-scope command; execution is recorded as not attempted.
 
 ```text
 Knowledge ≠ Authority

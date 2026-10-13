@@ -60,10 +60,10 @@ const authorityDefinitions = Object.freeze({
   }),
   defrost: Object.freeze({
     agentId: "site-engineer-controller",
-    label: "Defrost controller",
+    label: "Scheduled defrost controller",
     actionIndex: 5,
-    operation: "set_defrost_duration",
-    resources: ["store:184", "zone:chilled-03"],
+    operation: "run_scheduled_defrost",
+    resources: ["duration:1h", "store:184", "zone:chilled-03"],
   }),
 });
 
@@ -190,17 +190,17 @@ const scenarios = Object.freeze([
     expectedDecision: "allowed",
   }),
   Object.freeze({
-    id: "valid-authority-attack",
-    kind: "limitation",
-    shortLabel: "Valid authority attack",
-    title: "Compromised authorised controller",
-    summary: "A compromised site-engineer controller requests an eight-hour defrost cycle using valid, in-scope authority.",
-    admissionNote: "AgentEnvelope allows this command because its signer and authority are valid and the request is in scope. Authority verification does not prove operator intent or that a credential remains uncompromised. The current verifier does not use external behaviour history as an admission signal.",
-    source: "Site engineer controller (compromised)",
+    id: "authority-breakout-attempt",
+    kind: "attack",
+    shortLabel: "Scope breakout attempt",
+    title: "Known signer exceeds authority",
+    summary: "A known site-engineer signer requests an eight-hour defrost cycle, but its derived authority permits only the exact one-hour schedule.",
+    admissionNote: "AgentEnvelope recognises the signer, but the requested duration is outside its immutable Action Envelope. Authority cannot expand its own scope, so AgentEnvelope denies the command and records that execution was not attempted.",
+    source: "Known site engineer signer",
     authorityId: "defrost",
     command: Object.freeze({
-      operation: "set_defrost_duration",
-      resources: ["store:184", "zone:chilled-03"],
+      operation: "run_scheduled_defrost",
+      resources: ["duration:1h", "store:184", "zone:chilled-03"],
       value: 8,
       unit: "hours",
       displayValue: "8 hours",
@@ -208,7 +208,7 @@ const scenarios = Object.freeze([
     }),
     initialTemperature: 4,
     finalTemperature: 4,
-    expectedDecision: "allowed",
+    expectedDecision: "denied",
   }),
 ]);
 
@@ -238,7 +238,7 @@ function commandPayload(scenario) {
   };
 }
 
-function scopeCheck(record, payload) {
+function verifyAgentEnvelopeScope(record, payload) {
   if (!record) return { valid: false, reasonCode: "authority.not_found", reason: "No matching Public Action Record exists." };
   const envelope = record.actionEnvelope;
   if (envelope.operation !== payload.operation) {
@@ -248,11 +248,55 @@ function scopeCheck(record, payload) {
       reason: `${payload.operation} is outside the signed ${envelope.operation} authority.`,
     };
   }
-  const missing = payload.resources.find((resource) => !envelope.resources.includes(resource));
-  if (missing) {
-    return { valid: false, reasonCode: "authority.resource_denied", reason: `${missing} is outside the signed resource scope.` };
+
+  if (!Array.isArray(payload.resources) || payload.resources.some((resource) => typeof resource !== "string" || !resource)) {
+    return { valid: false, reasonCode: "authority.resource_denied", reason: "The command resources are malformed." };
   }
-  return { valid: true, reasonCode: "authority.scope_valid", reason: "Operation and resources match the Action Envelope." };
+
+  const requestedResources = new Set(payload.resources);
+  const permittedResources = new Set(envelope.resources);
+  if (requestedResources.size !== payload.resources.length) {
+    return { valid: false, reasonCode: "authority.resource_denied", reason: "The command contains duplicate resources." };
+  }
+
+  const unpermitted = payload.resources.find((resource) => !permittedResources.has(resource));
+  if (unpermitted) {
+    return { valid: false, reasonCode: "authority.resource_denied", reason: `${unpermitted} is outside the signed resource scope.` };
+  }
+
+  const omitted = envelope.resources.find((resource) => !requestedResources.has(resource));
+  if (omitted) {
+    return { valid: false, reasonCode: "authority.resource_denied", reason: `The command omits the required ${omitted} resource.` };
+  }
+
+  const parameter = scopedParameterResource(payload);
+  if (!parameter.valid) {
+    return { valid: false, reasonCode: "authority.parameter_denied", reason: parameter.reason };
+  }
+  if (parameter.resource && !permittedResources.has(parameter.resource)) {
+    return {
+      valid: false,
+      reasonCode: "authority.parameter_denied",
+      reason: `The requested value resolves to ${parameter.resource}, which is outside the immutable Action Envelope.`,
+    };
+  }
+  return { valid: true, reasonCode: "authority.scope_valid", reason: "The exact operation, resources and safety-relevant value match the Action Envelope." };
+}
+
+function scopedParameterResource(payload) {
+  if (payload.operation === "restore_safe_temperature") {
+    if (!Number.isFinite(payload.value) || payload.unit !== "c") {
+      return { valid: false, reason: "The temperature command does not contain a valid Celsius setpoint." };
+    }
+    return { valid: true, resource: `setpoint:${payload.value}c` };
+  }
+  if (payload.operation === "run_scheduled_defrost") {
+    if (!Number.isSafeInteger(payload.value) || payload.value < 1 || payload.unit !== "hours") {
+      return { valid: false, reason: "The defrost command does not contain a valid whole-hour duration." };
+    }
+    return { valid: true, resource: `duration:${payload.value}h` };
+  }
+  return { valid: true, resource: null };
 }
 
 function decisionEvidence({ scenario, payload, signature, record, verification, scope, decision }) {
@@ -263,7 +307,7 @@ function decisionEvidence({ scenario, payload, signature, record, verification, 
     commandId: payload.commandId,
     decision,
     reasonCode: decision === "allowed" ? "authority.verified" : scope.reasonCode,
-    reason: decision === "allowed" ? "Signature, public record and operation/resource scope passed; a legitimacy reference is present." : scope.reason,
+    reason: decision === "allowed" ? "AgentEnvelope signature, public record and exact Action Envelope scope passed; a legitimacy reference is present." : scope.reason,
     checkedAt: DEMO_TIME,
     commandHash: contentHash(payload),
     signature,
@@ -317,7 +361,7 @@ function runScenario(scenarioId) {
         expectedActionEnvelopeHash: record.actionEnvelopeHash,
       })
     : verifyAction({ message: payload, signature, expectedAddress: domain.domainAddress });
-  const scope = scopeCheck(record, payload);
+  const scope = verifyAgentEnvelopeScope(record, payload);
   const decision = verification.valid && scope.valid ? "allowed" : "denied";
   const evidence = decisionEvidence({ scenario, payload, signature, record, verification, scope, decision });
   const outcome = decision === "allowed" ? executionOutcome(payload, evidence) : null;

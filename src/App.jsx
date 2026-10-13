@@ -287,7 +287,7 @@ function AuthorityFlow({ result, phase, running }) {
   const steps = [
     [Fingerprint, "Identity", verifying ? "checking" : result ? (result.verification.valid ? "verified" : "failed") : "waiting"],
     [KeyRound, "Authority", verifying ? "checking" : result ? (result.record ? "found" : "missing") : "waiting"],
-    [ShieldCheck, "Scope", verifying ? "checking" : result ? (result.scope.valid ? "matched" : "denied") : "waiting"],
+    [ShieldCheck, "Exact scope", verifying ? "checking" : result ? (result.scope.valid ? "matched" : "denied") : "waiting"],
     [ClipboardCheck, "Evidence", verifying ? "preparing" : result ? "recorded" : "waiting"],
   ];
   const headline = !running ? "System paused" : verifying ? (phase === "recovering" ? "Authorising recovery" : "Verifying command") : result ? (allowed ? "Allowed" : "Denied") : "Gateway ready";
@@ -339,12 +339,12 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
           ))}
         </div>
         <div className="controller-rack">
-          <div className="rack-title"><ServerCog size={20} /><span>Trusted gateway</span></div>
+          <div className="rack-title"><ServerCog size={20} /><span>AgentEnvelope gateway</span></div>
           <div className={`gateway-light ${denied ? "red" : allowed ? "green" : "amber"}`} />
           <dl>
             <Fact label="Mode" value={!running ? "Paused" : denied ? "Fail closed" : recovering ? "Recovery admission" : verifying ? "Checking authority" : allowed ? "Executing" : "Admission guard"} />
             <Fact label="Compressor" value={recovering ? "Recovery requested" : scenario.id === "compressor" && phase !== "monitoring" ? "Fault detected" : "Online"} />
-            <Fact label="Defrost" value={result?.scenario.id === "valid-authority-attack" && result.decision === "allowed" ? "8-hour schedule accepted" : result?.scenario.id === "attack" && denied ? "Malicious request blocked" : "Scheduled only"} />
+            <Fact label="Defrost" value={result?.scenario.id === "authority-breakout-attempt" && denied ? "8-hour scope breakout blocked" : result?.scenario.id === "attack" && denied ? "Malicious request blocked" : "Scheduled only"} />
           </dl>
         </div>
       </div>
@@ -352,7 +352,7 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
         {denied ? <CircleOff size={19} /> : allowed ? <Check size={19} /> : <RadioTower size={19} />}
         <div>
           <strong>{verifying ? "authority.verification_in_progress" : recovering ? "recovery.authority_requested" : result ? result.evidence.reasonCode : "Gateway ready"}</strong>
-          <span>{verifying ? "Checking signer, public authority record, operation and resource scope." : recovering ? "The site-engineer restoration is being verified as a separate command." : result ? result.evidence.reason : "The refrigeration loop is live. Choose an event to submit a command."}</span>
+          <span>{verifying ? "Checking signer, public authority record, exact resources and safety-relevant values." : recovering ? "The site-engineer restoration is being verified as a separate command." : result ? result.evidence.reason : "The refrigeration loop is live. Choose an event to submit a command."}</span>
         </div>
       </div>
     </section>
@@ -384,7 +384,7 @@ function DecisionPanel({ result, phase }) {
   if (phase === "verifying" || phase === "recovering") return (
     <section className="panel decision-panel verifying">
       <PanelHeading icon={Gauge} eyebrow="Decision" title={phase === "recovering" ? "Authorising recovery" : "Verification in progress"} />
-      <p>{phase === "recovering" ? "A separately scoped site-engineer command must pass admission before the safe setpoint can be restored." : "The gateway is checking cryptographic identity, the public authority record and exact command scope."}</p>
+      <p>{phase === "recovering" ? "A separately scoped site-engineer command must pass AgentEnvelope admission before the safe setpoint can be restored." : "AgentEnvelope is checking cryptographic identity, the public authority record and exact Action Envelope scope."}</p>
     </section>
   );
   if (!result) return (
@@ -413,7 +413,7 @@ function ChecksPanel({ result, phase }) {
   const rows = [
     ["Identity signature", checks?.identity],
     ["Public authority record", checks?.authority],
-    ["Operation and resource scope", checks?.operationScope],
+    ["Exact operation, rules and resources", checks?.operationScope],
     ["Legitimacy reference present", checks?.legitimacy],
   ];
   return (
@@ -451,7 +451,7 @@ function EvidenceCard({ result }) {
 function AuthorityView() {
   return (
     <section className="page-view">
-      <PageHero eyebrow="Sovereign authority" title="One Domain. Five deliberately separate authorities." body="Monitoring can observe and alert. Maintenance can dispatch. Site control can restore a safe setpoint or change defrost duration only through its separately scoped authorities. Knowing the right value never grants control authority—and valid authority does not prove benign intent." />
+      <PageHero eyebrow="Sovereign authority" title="One Domain. Five deliberately separate authorities." body="Monitoring can observe and alert. Maintenance can dispatch. Site control can restore a safe setpoint or run only the exact defrost schedule in its separately derived authority. Knowing the right value never grants control authority—and a known signer cannot break out of scope." />
       <div className="authority-summary">
         <section className="domain-card">
           <span>Domain</span><h2>Store 184 refrigeration</h2>
