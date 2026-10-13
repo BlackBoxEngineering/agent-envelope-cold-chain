@@ -65,3 +65,23 @@ test("remains usable on a phone-sized viewport", async ({ page }) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test("exposes the optional portal handoff without blocking the local demo", async ({ page }) => {
+  const errors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Setup guide" }).click();
+
+  await expect(page.getByRole("heading", { name: "Connect portal-created agents" })).toBeVisible();
+  await expect(page.getByText("Temperature monitor", { exact: true })).toBeVisible();
+  await expect(page.getByText("Maintenance dispatch", { exact: true })).toBeVisible();
+  await expect(page.getByText("Site engineer controller", { exact: true })).toBeVisible();
+  await expect(page.locator(".hosted-setup-footer").getByText(/replace mint-delegate\.monitor\.json/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save session" })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  expect(errors).toEqual([]);
+});

@@ -29,6 +29,15 @@ import {
   XCircle,
 } from "lucide-react";
 import { authorities, domain, runScenario, scenarios, witnessEntry } from "./coldChainAuthority.js";
+import {
+  clearHostedConfig,
+  hostedConfigStatus,
+  hostedResultStatus,
+  hostedRoleSummaries,
+  initialHostedConfig,
+  publishHostedColdChainResult,
+  saveHostedConfig,
+} from "./coldChainHosted.js";
 
 const viewIds = new Set(["run", "authority", "evidence", "setup"]);
 const VIEW_KEY = "agent-envelope-cold-chain:view";
@@ -48,6 +57,14 @@ function App() {
   const [running, setRunning] = useState(false);
   const [temperature, setTemperature] = useState(4);
   const [phase, setPhase] = useState("paused");
+  const [hostedConfig, setHostedConfig] = useState(() => initialHostedConfig());
+  const [hostedState, setHostedState] = useState(() => ({
+    ...hostedConfigStatus(initialHostedConfig()),
+    publishing: false,
+    records: [],
+    recordUrl: "",
+    ledgerUrl: "",
+  }));
   const timers = useRef(new Set());
   const temperatureTick = useRef(0);
   const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
@@ -105,6 +122,7 @@ function App() {
       const next = runScenario(selected.id);
       setResult(next);
       appendToLedger(next);
+      void publishHostedResult(next);
       if (next.decision === "denied") {
         setPhase("denied");
         schedule(() => setPhase("monitoring"), 1800);
@@ -122,6 +140,7 @@ function App() {
             setResult(recovery);
             setTemperature(recovery.temperature);
             appendToLedger(recovery);
+            void publishHostedResult(recovery);
             setPhase("allowed");
             schedule(() => setPhase("monitoring"), 1800);
           }, 1200);
@@ -137,6 +156,83 @@ function App() {
       const previousHash = current.at(0)?.entryHash ?? null;
       const entry = witnessEntry(next, previousHash, current.length + 1);
       return [{ ...entry, result: next }, ...current];
+    });
+  }
+
+  async function publishHostedResult(next) {
+    const readiness = hostedResultStatus(hostedConfig, next);
+    if (!readiness.ready) {
+      setHostedState((current) => ({
+        ...current,
+        ...readiness,
+        publishing: false,
+        recordUrl: "",
+        ledgerUrl: "",
+      }));
+      return;
+    }
+    setHostedState((current) => ({
+      ...current,
+      ready: true,
+      label: "publishing",
+      message: "Minting bounded authority and publishing the completed action...",
+      publishing: true,
+      recordUrl: "",
+      ledgerUrl: "",
+    }));
+    try {
+      const published = await publishHostedColdChainResult(hostedConfig, next);
+      setHostedState((current) => ({
+        ready: true,
+        label: "recorded",
+        message: `${published.roleLabel} was registered, verified and recorded as completed.`,
+        publishing: false,
+        records: [published, ...current.records].slice(0, 5),
+        recordUrl: published.links.record,
+        ledgerUrl: published.links.ledger,
+      }));
+    } catch (error) {
+      setHostedState((current) => ({
+        ...current,
+        ready: true,
+        label: "failed",
+        message: error instanceof Error ? error.message : "Hosted publication failed.",
+        publishing: false,
+        recordUrl: "",
+        ledgerUrl: "",
+      }));
+    }
+  }
+
+  function updateHostedConfig(patch) {
+    setHostedConfig((current) => {
+      const next = { ...current, ...patch };
+      setHostedState((state) => ({
+        ...state,
+        ...hostedConfigStatus(next),
+        publishing: false,
+        recordUrl: "",
+        ledgerUrl: "",
+      }));
+      return next;
+    });
+  }
+
+  function saveHostedSession() {
+    saveHostedConfig(hostedConfig);
+    setHostedState((current) => ({ ...current, ...hostedConfigStatus(hostedConfig), publishing: false }));
+  }
+
+  function clearHostedSession() {
+    clearHostedConfig();
+    const next = initialHostedConfig();
+    setHostedConfig(next);
+    setHostedState({
+      ...hostedConfigStatus(next),
+      publishing: false,
+      records: [],
+      recordUrl: "",
+      ledgerUrl: "",
     });
   }
 
@@ -168,13 +264,27 @@ function App() {
           running={running}
           temperature={temperature}
           phase={phase}
+          hosted={{
+            config: hostedConfig,
+            state: hostedState,
+            roles: hostedRoleSummaries(hostedConfig),
+          }}
           onStart={startSystem}
           onSelectScenario={selectScenario}
         />
       )}
       {view === "authority" && <AuthorityView />}
       {view === "evidence" && <EvidenceView ledger={ledger} onRun={() => changeView("run")} />}
-      {view === "setup" && <SetupView />}
+      {view === "setup" && (
+        <SetupView
+          hostedConfig={hostedConfig}
+          hostedState={hostedState}
+          hostedRoles={hostedRoleSummaries(hostedConfig)}
+          onHostedChange={updateHostedConfig}
+          onHostedSave={saveHostedSession}
+          onHostedClear={clearHostedSession}
+        />
+      )}
       <footer>
         <span>AgentEnvelope Cold Chain</span>
         <span className="footer-separator">•</span>
@@ -215,7 +325,7 @@ function Toolbar({ view, running, onViewChange, onReset }) {
   );
 }
 
-function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperature, phase, onStart, onSelectScenario }) {
+function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperature, phase, hosted, onStart, onSelectScenario }) {
   const busy = running && phase !== "monitoring";
   return (
     <section className="workspace">
@@ -275,6 +385,7 @@ function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperatu
         <DecisionPanel result={result} phase={phase} />
         <ChecksPanel result={result} phase={phase} />
         <EvidenceCard result={result} />
+        <HostedRecordsPanel hosted={hosted} />
       </aside>
     </section>
   );
@@ -448,6 +559,37 @@ function EvidenceCard({ result }) {
   );
 }
 
+function HostedRecordsPanel({ hosted }) {
+  const state = hosted?.state ?? { label: "configuration required", message: "Hosted publishing is not configured." };
+  const latest = state.records?.[0];
+  const className = state.label.replaceAll(" ", "-");
+  return (
+    <section className={`panel hosted-records-panel ${className}`}>
+      <PanelHeading icon={Link2} eyebrow="Hosted lifecycle" title="Portal records" />
+      <div className="hosted-state-row">
+        <span className={`hosted-state-pill ${className}`}>{state.publishing ? "publishing" : state.label}</span>
+        <strong>{state.ready ? "Connected path" : "Local simulation"}</strong>
+      </div>
+      <p>{state.message}</p>
+      {latest && (
+        <dl className="evidence-facts hosted-latest">
+          <Fact label="Authority" value={latest.roleLabel} />
+          <Fact label="Record" value={shortHash(latest.record.recordId)} mono />
+          <Fact label="Verification" value={latest.report.valid ? "allowed" : "denied"} />
+          <Fact label="Completion" value={latest.outcomeReceipt.accepted ? "witnessed" : "not recorded"} />
+        </dl>
+      )}
+      {(state.recordUrl || state.ledgerUrl) && (
+        <div className="hosted-record-links">
+          {state.recordUrl && <a href={state.recordUrl} target="_blank" rel="noreferrer">Open record</a>}
+          {state.ledgerUrl && <a href={state.ledgerUrl} target="_blank" rel="noreferrer">Open ledger</a>}
+        </div>
+      )}
+      <small>Configure portal delegates and credentials in Setup guide. Denied local attempts remain in the incident chain without minting a hosted capability.</small>
+    </section>
+  );
+}
+
 function AuthorityView() {
   return (
     <section className="page-view">
@@ -492,13 +634,13 @@ function EvidenceView({ ledger, onRun }) {
       <div className="evidence-limitations">
         <section className="evidence-boundary"><TriangleAlert size={21} /><div><strong>Command boundary</strong><p>A denied command proves the gateway rejected that submitted attempt. It cannot record a path that bypasses the gateway entirely.</p></div></section>
         <section className="evidence-boundary"><RadioTower size={21} /><div><strong>Observation boundary</strong><p>This chain records what arrived. It does not prove that an expected temperature reading arrived on schedule; silence and a quiet night remain indistinguishable here.</p></div></section>
-        <section className="evidence-boundary"><UserRoundCheck size={21} /><div><strong>Hosted witness path</strong><p>This local run does not call hosted services. The implemented hosted path appends AE witness blocks, can send the AE head to AILeash for external custody, and can submit verified completed outcomes to MIR for checkpointed transparency. MIR does not receive denied decisions or custody the AE head.</p></div></section>
+        <section className="evidence-boundary"><UserRoundCheck size={21} /><div><strong>Hosted witness path</strong><p>The demo runs locally by default. When portal delegates and credentials are configured, allowed commands are minted, registered and verified through AgentEnvelope before their signed completion is submitted to the hosted outcome route. Configured witnessing and MIR processing remain backend concerns.</p></div></section>
       </div>
     </section>
   );
 }
 
-function SetupView() {
+function SetupView({ hostedConfig, hostedState, hostedRoles, onHostedChange, onHostedSave, onHostedClear }) {
   const ingressPaths = [
     ["Internet", "Remote management"],
     ["Contractor", "Protected service access"],
@@ -532,6 +674,33 @@ function SetupView() {
         <p className="boundary-warning"><TriangleAlert size={18} /><span>The gateway must be the only operational command path. A route that actuates beneath or around it is outside the AgentEnvelope boundary.</span></p>
       </section>
       <div className="setup-grid">{stages.map(([number, title, body]) => <article key={number}><span>{number}</span><div><h2>{title}</h2><p>{body}</p></div></article>)}</div>
+      <section className="hosted-setup">
+        <div className="hosted-setup-heading">
+          <div><span>Optional hosted demonstration</span><h2>Connect portal-created agents</h2><p>The simulator remains local until all three signed delegate handoffs and hosted credentials are present. Values entered here are kept only for this browser session.</p></div>
+          <a href="https://agentenvelope.io/agents" target="_blank" rel="noreferrer">Open Agent Authority</a>
+        </div>
+        <div className="hosted-config-grid">
+          <label><span>API key</span><input type="password" value={hostedConfig.apiKey} onChange={(event) => onHostedChange({ apiKey: event.target.value })} placeholder="VITE_AE_API_KEY" /></label>
+          <label><span>Owner user id</span><input value={hostedConfig.ownerUserId} onChange={(event) => onHostedChange({ ownerUserId: event.target.value })} placeholder="VITE_AE_OWNER_USER_ID" /></label>
+        </div>
+        <div className="hosted-role-list">
+          {hostedRoles.map((role) => (
+            <details key={role.id} className="hosted-role">
+              <summary><span><strong>{role.label}</strong><small>{role.delegateId}</small></span><em>{role.validation.valid && role.botKeyReady && role.mintMaterialReady ? "ready" : "setup required"}</em></summary>
+              <p>{role.scope}</p>
+              {!role.validation.valid && <p className="hosted-role-warning">{role.validation.message}</p>}
+              <div className="hosted-config-grid">
+                <label><span>Bot key</span><input type="password" value={hostedConfig[`${role.id}BotKey`]} onChange={(event) => onHostedChange({ [`${role.id}BotKey`]: event.target.value })} placeholder={`VITE_AE_${role.id.toUpperCase()}_BOT_KEY`} /></label>
+                <label><span>Mint material</span><input type="password" value={hostedConfig[`${role.id}MintMaterial`]} onChange={(event) => onHostedChange({ [`${role.id}MintMaterial`]: event.target.value })} placeholder={`VITE_AE_${role.id.toUpperCase()}_MINT_MATERIAL`} /></label>
+              </div>
+            </details>
+          ))}
+        </div>
+        <div className="hosted-setup-footer">
+          <p><strong>{hostedState.label}</strong><span>{hostedState.message}</span></p>
+          <div><button type="button" onClick={onHostedClear}>Clear session</button><button className="primary" type="button" onClick={onHostedSave}>Save session</button></div>
+        </div>
+      </section>
       <section className="claim-box"><ShieldCheck size={26} /><div><span>The defensible claim</span><h2>Only commands carrying valid, scoped authority reach the simulated controller—and every submitted decision leaves cryptographic evidence.</h2></div></section>
     </section>
   );

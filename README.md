@@ -1,6 +1,6 @@
 # AgentEnvelope Cold Chain
 
-A hosted demonstration of sovereign derived authority for connected refrigeration systems.
+A simulated hosted AgentEnvelope demonstration of sovereign derived authority for connected refrigeration systems. It runs locally by default and can be connected to the real hosted mint, record, verification and completed-outcome routes with portal-created delegates.
 
 > **Stop the command. Preserve the evidence. End the blame game.**
 
@@ -44,27 +44,27 @@ There is no central issuer of derived authority. The portal provides the operati
 
 The hosted service can verify, govern, record and witness authority. It cannot independently create sovereign authority or reconstruct the private derivation path.
 
-## Hosted command flow
+## Simulated and hosted command flow
 
-The portal is used to create the cold-chain Domain and its Agent authorities:
+The local simulator contains deterministic demonstration authority so every scenario works without an account or network connection. For the optional hosted path, use the portal to create the cold-chain Domain and three runtime delegates:
 
 - **Temperature monitor** — may read temperatures and alert an engineer.
 - **Maintenance dispatch** — may dispatch an approved refrigeration contractor.
 - **Site engineer controller** — may restore the exact safe setpoint or run the exact one-hour defrost schedule through separately scoped authorities.
 
-Each Agent authority is bounded by its signed operation, resources, action limits and legitimacy reference.
+Each runtime delegate is bounded by its signed operations, resources, action-index range, mint limits, time window and required legitimacy reference. The browser receives only the signed handoff, runtime bot key and one-time mint material; it never receives the Vault root or Domain seed.
 
-At runtime:
+For each locally allowed action, the connected demonstration then:
 
-1. The machine presents its signed delegated request.
-2. Hosted governance checks the delegate, request signature, scope, replay, limits and current legitimacy.
-3. The machine derives its capability locally.
-4. A seedless `PublicActionRecord` is registered for verification.
-5. The signed command is checked against that record and its immutable `ActionEnvelope`.
-6. An allowed command reaches the trusted controller gateway; a denied command does not.
-7. The hosted backend appends the allow or deny decision to the AgentEnvelope witness chain.
-8. A completed action produces a separately signed execution outcome and its own witness block.
-9. When configured, AILeash retains the AgentEnvelope public head as an external custody witness. MIR receives opaque completed-action events and publishes a checkpoint chain that AgentEnvelope independently verifies.
+1. Builds and signs a `MintRequest` against the matching portal delegate.
+2. Calls `/sovereign/mint`, where hosted governance checks delegate signature, scope, replay, mint limits and current legitimacy.
+3. Derives the one-use action capability locally from the handoff material.
+4. Registers a seedless `PublicActionRecord` through `/sovereign/agents/register-delegated`.
+5. Signs the cold-chain command with the derived action seed and verifies it through `/sovereign/verify`.
+6. Signs a separate `agentenvelope.executionOutcome` after the simulated action completes and submits it through `/sovereign/outcomes`.
+7. The backend attempts the configured AgentEnvelope witness append for verification and completion. When enabled for that account, external witness and MIR processing happen behind the API.
+
+The demo does not mint a hosted capability for a command that already failed local identity or exact-scope admission. Those denied attempts remain in its local signed decision evidence and hash-linked incident sequence. The hosted verifier itself can record a denied verification when a registered record is found but its submitted action fails verification; that is a different boundary from an unknown or locally rejected command.
 
 API keys provide access to the hosted service. They are not authority.
 
@@ -76,16 +76,17 @@ Each request pauses at the AgentEnvelope gateway while its signature, public aut
 
 ## Evidence, not arguments
 
-Every command submitted through the trusted gateway produces locally signed decision evidence containing:
+Every command submitted through the simulated trusted gateway produces locally signed decision evidence containing:
 
 - the command hash;
 - the signer address;
 - the matching public authority record;
 - the Action Envelope hash;
 - the scope decision and legitimacy reference;
-- the allow or deny reason;
-- the decision time; and
-- the preceding evidence-chain hash.
+- the allow or deny reason; and
+- the decision time.
+
+The simulator then wraps each decision and optional outcome hash in a separate local hash-linked sequence entry containing the preceding entry hash. The decision signature and the sequence link are deliberately not described as the same object.
 
 Allowed commands add a separately signed execution outcome. Denied commands record that execution was not attempted.
 
@@ -114,9 +115,9 @@ The resulting evidence distinguishes:
 - whether the controller executed it; and
 - whether links within the exported sequence remain intact.
 
-The local simulator signs its own decisions with a deterministic demo key and does not call the hosted integrations. The implemented hosted path is stronger: AgentEnvelope appends verification and completion witness blocks; AILeash can retain the AgentEnvelope public head outside the portal; and MIR can receive verified completed-action events while AgentEnvelope independently checks MIR's published checkpoint chain.
+The local simulator signs its own decisions with deterministic demo keys and does not call hosted services until valid portal handoffs and credentials are configured. Once connected, an allowed simulator action also follows the real hosted mint, delegated registration, verification and execution-outcome routes. The backend attempts its configured verification and completion witness appends; whether AILeash or MIR is enabled is account and backend configuration, not a claim the browser can make by itself.
 
-Those roles are deliberately separate. MIR does not custody the AgentEnvelope head, and an authority check alone sends nothing to MIR. Denied attempts remain in the AgentEnvelope witness chain; MIR receives only explicitly reported completed outcomes. The current AgentEnvelope verifier does not use MIR history as an admission-time behaviour signal.
+Those roles are deliberately separate. MIR does not custody the AgentEnvelope head, and an authority check alone sends nothing to MIR. Locally denied attempts remain in this demo's local evidence sequence. MIR receives only completed outcomes submitted to `/sovereign/outcomes`, and only when the backend MIR integration is enabled. The current AgentEnvelope verifier does not use MIR history as an admission-time behaviour signal.
 
 The chain also records only what arrived. It does not prove that a temperature reading expected every minute actually arrived. A six-hour monitoring silence and a genuinely quiet six hours are indistinguishable without a separate, implemented record of observations due.
 
@@ -144,3 +145,26 @@ npm run dev
 npm run build
 npm run test:smoke
 ```
+
+## Connect the hosted portal
+
+1. In AgentEnvelope, create or open the refrigeration Domain used for this demo.
+2. Create these three runtime delegates on **Agent Authority**:
+
+   - **Temperature monitor**: operations `alert_engineer`, `read_temperature`; resources `store:184`, `zone:chilled-03`.
+   - **Maintenance dispatch**: operation `dispatch_contractor`; resources `contractor:approved-refrigeration`, `store:184`, `zone:chilled-03`.
+   - **Site engineer controller**: operations `restore_safe_temperature`, `run_scheduled_defrost`; resources `setpoint:4c`, `duration:1h`, `store:184`, `zone:chilled-03`.
+
+3. Attach a required legitimacy reference to each delegate and choose an action-index range large enough for repeated demonstration runs.
+4. Replace these placeholder files with the downloaded portal handoff JSON:
+
+   - `mint-delegate.monitor.json`
+   - `mint-delegate.dispatch.json`
+   - `mint-delegate.engineer.json`
+
+5. Copy each delegate's one-time mint material before leaving the portal. The portal does not retain it for later display.
+6. Generate a separate 32-byte worker bot key for each role. The portal does not supply worker private keys. For this demonstration's `any-signed-bot` policy, one can be generated with `node --input-type=module -e "import { randomBytes } from 'node:crypto'; console.log(randomBytes(32).toString('hex'))"`.
+7. Copy `.env.example` to `.env.local` and add the hosted API key, owner user id, three bot keys and three mint-material values. Alternatively, enter them in **Setup guide**; that form stores them only in browser `sessionStorage`.
+8. Restart the Vite server after changing environment variables or handoff files. The **Portal records** panel changes to `ready`; allowed actions then publish automatically.
+
+`VITE_` values are visible to browser code. This is intentional for a demonstration handoff and is not a production secret-custody design. A production refrigeration gateway should store runtime secrets in its trusted service or device boundary and call the same API routes from there. Never commit populated `.env.local` or handoff secret values.

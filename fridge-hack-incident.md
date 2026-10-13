@@ -254,6 +254,24 @@ AgentEnvelope asks:
 
 That check is independent of whether a request arrived through Wi-Fi, a VPN, a cloud platform or a contractor connection—but only if the AgentEnvelope-verifying gateway is the controller's sole operational command path.
 
+### What the Action Envelope fixes
+
+An AgentEnvelope v1 `ActionEnvelope` fixes one agent id, Domain, action index, operation, resource set, time window, decay mode and maximum-use declaration. The complete canonical envelope is hashed before the action capability is derived. Changing any of those fields produces a different authority.
+
+For this cold-chain example, an exact duration is represented as a resource:
+
+```text
+operation: run_scheduled_defrost
+resources: store:184, zone:chilled-03, duration:1h
+actionIndex: 5
+decayMode: ACTION
+maxUses: 1
+```
+
+AgentEnvelope v1 does not contain a generic numeric predicate language such as `duration <= 1h`. The cold-chain integration canonically projects the requested value into a resource—for example, an eight-hour request becomes `duration:8h`—and requires an exact match with the immutable Action Envelope. It does not trust a caller-supplied `duration:1h` label when the payload actually requests eight hours.
+
+This projection is an essential integration step. The generic SDK verifies the signed payload, action index, public record, envelope commitment and decay, but it cannot infer refrigeration semantics from arbitrary JSON. The local demo performs the projection and exact comparison explicitly. A production gateway must do the equivalent before actuation.
+
 ### What AgentEnvelope can stop
 
 Where every actuation request must cross the gateway, AgentEnvelope can reject:
@@ -261,12 +279,47 @@ Where every actuation request must cross the gateway, AgentEnvelope can reject:
 - an unknown signer;
 - a signer with no public authority record;
 - a command outside the authorised operation;
-- a command targeting resources outside its Action Envelope;
+- a command whose canonically projected resources or values are outside its Action Envelope;
 - an invalid signature;
-- stale or invalid hosted legitimacy; and
-- replay or action-limit violations when enforced by the hosted path.
+- an inactive record, wrong action index, mismatched envelope hash or expired time window; and
+- stale or invalid hosted legitimacy.
 
 A denial can still produce evidence showing that execution was not attempted. This records an important negative fact, not merely actions that completed.
+
+### Use limits and repeated valid commands
+
+The Action Envelope commits to `limits.maxUses`, and `ACTION` or `BOTH` decay requires a positive maximum-use count. However, v1 deliberately records `limits.enforcement: "external"`: the SDK's record verification is stateless except for time and cannot know whether a use slot has already been consumed.
+
+The current hosted action-verification route reports `maxUses` but does not atomically consume an action use or reject a repeated action payload. The local simulator also does not model a durable use counter. It would therefore be inaccurate to claim that the implemented hosted path already stops eight individually valid one-hour commands by counting them.
+
+That is separate from delegated mint governance. Hosted mint already enforces mint-request nonce replay, the delegate's `maxMints`, required legitimacy and the requested `maxUses` ceiling. Atomic consumption of an already-derived action capability remains an action-admission responsibility that must be implemented before relying on `maxUses` operationally.
+
+### Who can derive broader authority
+
+Authority is derived rather than centrally issued. The customer-controlled Vault derives the Domain authority. A direct action capability is derived locally from that authority. For autonomous runtimes, the Domain authority can sign a `MintDelegate` that fixes:
+
+- allowed operations and resources;
+- the permitted action-index range;
+- `maxMints`;
+- `maxUsesPerAction`;
+- the delegate time window;
+- the accepted bot policy; and
+- an optional legitimacy reference.
+
+A runtime cannot request `duration:8h` through a delegate restricted to `duration:1h`, and it cannot raise its own mint or use ceilings. The hosted mint path verifies the Domain signature, bot signature and these bounds, then enforces nonce replay, mint count and current legitimacy.
+
+The authority owner still has to define the correct operational bounds. AgentEnvelope makes those bounds immutable and verifiable; it does not decide that one hour or 4°C is safe for a particular refrigeration installation. A compromised Vault or Domain signing authority would have a larger blast radius than a captured action capability and belongs in the threat model.
+
+Mint completion is currently written to the hosted audit trail and can receive a signed AgentEnvelope receipt when the attestation key is configured. It is not currently appended to the AgentEnvelope witness chain, so minting must not be described as witnessed end to end.
+
+### The two demo denials
+
+The cold-chain demo includes two deliberately different failures:
+
+1. **Unknown signer:** the 50°C request has no matching authority and is denied.
+2. **Scope breakout attempt:** a known site-engineer signer requests an eight-hour defrost duration while presenting the permitted one-hour resource label. The integration projects the command to `duration:8h`, which does not match its immutable `duration:1h` Action Envelope. Identity and signature checks pass; exact scope fails, so execution is denied and recorded as not attempted.
+
+The second case shows why recognising a signer is not enough. A valid action identity cannot extend its own authority. Capturing one derived action capability exposes that envelope; it does not reveal the Vault, Domain key or sibling action capabilities. Its practical blast radius still depends on enforcing the envelope's time window and externally governed use limit.
 
 ### What AgentEnvelope cannot stop by authority checking alone
 
@@ -276,28 +329,25 @@ AgentEnvelope does not solve:
 - compromised controller firmware;
 - obsolete or unpatched devices;
 - direct Internet exposure;
-- distinguish legitimate use from stolen signing capability when the requested action exactly matches the derived scope;
-- infer intent from an otherwise valid, exactly scoped command; or
+- distinguishing legitimate use from stolen signing capability when the requested action exactly matches the derived scope;
+- inferring intent from an otherwise valid, exactly scoped command;
+- aggregate harm caused by repeated valid commands when stateful use or rate controls are absent;
+- incorrect safety bounds chosen by the authority owner; or
 - a compromised credential behaving within its established pattern.
-
-The cold-chain demo therefore includes two attack cases:
-
-1. **Unknown signer:** the 50°C request has no matching authority and is denied.
-2. **Scope breakout attempt:** a known site-engineer signer requests an eight-hour defrost duration while presenting the permitted one-hour resource label. The command projects to `duration:8h`, which does not match its immutable `duration:1h` Action Envelope. AgentEnvelope accepts the identity and signature but denies the out-of-scope command; execution is recorded as not attempted.
-
-The second case shows why recognising a signer is not enough. AgentEnvelope admission compares the requested operation and every safety-relevant resource with the immutable Action Envelope. A valid identity cannot extend its own authority.
 
 ### Evidence and witnessing
 
 The implemented hosted AgentEnvelope path separates admission from execution:
 
-1. The signed action is verified.
-2. The backend attempts to append the allow or deny report to the AgentEnvelope witness chain.
+1. The backend finds the published action record and verifies the signed action.
+2. For a found record, the backend attempts to append the allow or deny report to the AgentEnvelope witness chain.
 3. If an allowed action completes, the runtime submits a separately signed execution outcome.
 4. The backend verifies that outcome and attempts to append a completion witness block.
 5. If enabled, AILeash/Sebbi receives the AgentEnvelope public head as an external custody witness.
 6. If enabled and server-configured, MIR receives an opaque `agent.action.completed` event.
 7. AgentEnvelope independently retrieves and recomputes MIR's public checkpoint chain.
+
+An unknown `recordId` or `agentId` currently returns `404` before a hosted verification report or witness block is created. The local cold-chain simulator still records its unknown-signer denial in its own signed, hash-linked evidence sequence. Those are different implementations and must not be conflated.
 
 The roles are not interchangeable:
 
@@ -305,8 +355,8 @@ The roles are not interchangeable:
 - MIR provides completed-action transparency and a separately verifiable checkpoint history.
 - MIR does not custody the AgentEnvelope head.
 - Authority verification alone sends nothing to MIR.
-- Denied attempts remain in the AgentEnvelope witness chain and are not MIR completion events.
-- The current AgentEnvelope verifier does not use MIR behaviour history as an admission-time signal.
+- Denied verification reports for found records can remain in the AgentEnvelope witness chain and are not MIR completion events.
+- The current AgentEnvelope verifier does not use MIR participation history as an admission-time signal.
 
 The local cold-chain simulator demonstrates signed decisions, outcomes and hash linkage without calling these hosted integrations.
 
@@ -318,7 +368,7 @@ The incident exposed a second class of evidence problem. If a temperature readin
 
 Tamper evidence proves properties of records that exist. It does not prove that an expected observation was produced.
 
-Closing that gap requires an implemented representation of an observation that was due, for example a schedule or heartbeat whose absence becomes a recordable event. That primitive is not currently part of this demo and should not be implied by command signatures or witness-chain integrity.
+Closing that gap requires a separately designed observation expectation—for example, a signed schedule or heartbeat—and a designated observer able to attest that it did not receive the expected reading by the deadline. Such evidence proves the observer's non-receipt under the stated schedule; it does not prove universal non-existence. This is not currently implemented in AgentEnvelope or the cold-chain demo and should not be implied by command signatures or witness-chain integrity.
 
 ## Sources
 
