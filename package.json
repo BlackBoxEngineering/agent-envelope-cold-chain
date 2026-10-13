@@ -1,0 +1,26 @@
+{
+  "name": "agent-envelope-cold-chain",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Deterministic cold-chain authority and evidence simulator for AgentEnvelope.",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:smoke": "playwright test",
+    "test:smoke:install": "playwright install chromium"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "agent-envelope-sdk": "^1.4.6",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
