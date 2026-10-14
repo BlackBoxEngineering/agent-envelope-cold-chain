@@ -148,23 +148,100 @@ npm run test:smoke
 
 ## Connect the hosted portal
 
-1. In AgentEnvelope, create or open the refrigeration Domain used for this demo.
-2. Create these three runtime delegates on **Agent Authority**:
+The hosted path uses a portal Vault, one cold-chain Domain and three bounded runtime delegates. The Vault root and Domain seed never enter this repository.
 
-   - **Temperature monitor**: operations `alert_engineer`, `read_temperature`; resources `store:184`, `zone:chilled-03`.
-   - **Maintenance dispatch**: operation `dispatch_contractor`; resources `contractor:approved-refrigeration`, `store:184`, `zone:chilled-03`.
-   - **Site engineer controller**: operations `restore_safe_temperature`, `run_scheduled_defrost`; resources `setpoint:4c`, `duration:1h`, `store:184`, `zone:chilled-03`.
+### 1. Create or open your Vault
 
-3. Attach a required legitimacy reference to each delegate and choose an action-index range large enough for repeated demonstration runs.
-4. Replace these placeholder files with the downloaded portal handoff JSON:
+1. Sign in to [AgentEnvelope](https://agentenvelope.io/) and open **Dashboard**.
+2. Under **Your Vault**, create an encrypted Vault if the account does not already have one.
+3. Keep the Vault passphrase safe. You need it in the portal to sign the Domain and each `MintDelegate`; the hosted service does not receive the Vault root.
+4. Confirm that the Vault is shown as **Encrypted** before continuing.
 
-   - `mint-delegate.monitor.json`
-   - `mint-delegate.dispatch.json`
-   - `mint-delegate.engineer.json`
+An existing Vault can be reused. Do not create a new Vault merely to rerun the demo.
 
-5. Copy each delegate's one-time mint material before leaving the portal. The portal does not retain it for later display.
-6. Generate a separate 32-byte worker bot key for each role. The portal does not supply worker private keys. For this demonstration's `any-signed-bot` policy, one can be generated with `node --input-type=module -e "import { randomBytes } from 'node:crypto'; console.log(randomBytes(32).toString('hex'))"`.
-7. Copy `.env.example` to `.env.local` and add the hosted API key, owner user id, three bot keys and three mint-material values. Alternatively, enter them in **Setup guide**; that form stores them only in browser `sessionStorage`.
-8. Restart the Vite server after changing environment variables or handoff files. The **Portal records** panel changes to `ready`; allowed actions then publish automatically.
+### 2. Create the cold-chain Domain
 
-`VITE_` values are visible to browser code. This is intentional for a demonstration handoff and is not a production secret-custody design. A production refrigeration gateway should store runtime secrets in its trusted service or device boundary and call the same API routes from there. Never commit populated `.env.local` or handoff secret values.
+Open **Workspace -> Domains**, choose **Create Domain**, and enter:
+
+| Field | Value |
+| --- | --- |
+| Namespace | `cold-chain` |
+| Domain ID | `refrigeration-control` |
+| Kind | `infrastructure` |
+
+This produces the authority branch used by every runtime in the demonstration. Open the Domain once it has been created and confirm that the heading reads `cold-chain / refrigeration-control / infrastructure`.
+
+### 3. Create the runtime delegates
+
+Open **Workspace -> Agent Authority**, select the `cold-chain / refrigeration-control / infrastructure` Domain, and choose **Add delegate**. Create all three delegates with the following common settings:
+
+| Setting | Value |
+| --- | --- |
+| Bot policy | `any-signed-bot` |
+| Max mints | `500` |
+| Max uses per action | `1` |
+| Action index min | `0` |
+| Action index max | `1000` |
+| Delegate expiry | A future date covering the intended demonstration period |
+| Create legitimacy state for this delegate | Enabled |
+
+Use these exact names and boundaries:
+
+| Delegate name | Allowed operations | Allowed resources |
+| --- | --- | --- |
+| `Temperature monitor` | `alert_engineer`, `read_temperature` | `store:184`, `zone:chilled-03` |
+| `Maintenance dispatch` | `dispatch_contractor` | `contractor:approved-refrigeration`, `store:184`, `zone:chilled-03` |
+| `Site engineer controller` | `restore_safe_temperature`, `run_scheduled_defrost` | `setpoint:4c`, `duration:1h`, `store:184`, `zone:chilled-03` |
+
+Enter the Vault passphrase and choose **Sign MintDelegate** for each one. Enabling the legitimacy option creates the neutral hosted legitimacy state used during mint and verification; the cold-chain application still defines the refrigeration-specific safety meaning of the operations and resources.
+
+### 4. Save each worker handoff
+
+After signing a delegate, copy its **handoff JSON** into the matching file and copy the displayed **mint material** immediately:
+
+| Delegate | Handoff file | Mint-material variable |
+| --- | --- | --- |
+| Temperature monitor | `mint-delegate.monitor.json` | `VITE_AE_MONITOR_MINT_MATERIAL` |
+| Maintenance dispatch | `mint-delegate.dispatch.json` | `VITE_AE_DISPATCH_MINT_MATERIAL` |
+| Site engineer controller | `mint-delegate.engineer.json` | `VITE_AE_ENGINEER_MINT_MATERIAL` |
+
+The portal displays mint material only as part of the signing handoff; it cannot recover it later without unlocking the Vault again. Draft 00 derives this material from the Vault identity root and Domain hash, so delegates in the same Domain can display the same value. Keep separate environment-variable slots because these are separate runtime deployments. The delegate and mint request are incorporated later when the SDK derives each action seed, so their action capabilities remain distinct.
+
+### 5. Configure the three workers
+
+Generate a different 32-byte bot key for each runtime. The portal does not create or retain worker private keys:
+
+```bash
+node --input-type=module -e "import { randomBytes } from 'node:crypto'; console.log('0x' + randomBytes(32).toString('hex'))"
+```
+
+Run that command three times, then copy `.env.example` to `.env.local` and populate:
+
+```dotenv
+VITE_AE_API_BASE=https://jemdjwteae.execute-api.us-east-1.amazonaws.com/v1
+VITE_AE_API_KEY=<hosted API key>
+VITE_AE_OWNER_USER_ID=<portal account owner user id>
+
+VITE_AE_MONITOR_BOT_KEY=<temperature-monitor bot key>
+VITE_AE_MONITOR_MINT_MATERIAL=<temperature-monitor mint material>
+
+VITE_AE_DISPATCH_BOT_KEY=<maintenance-dispatch bot key>
+VITE_AE_DISPATCH_MINT_MATERIAL=<maintenance-dispatch mint material>
+
+VITE_AE_ENGINEER_BOT_KEY=<site-engineer bot key>
+VITE_AE_ENGINEER_MINT_MATERIAL=<site-engineer mint material>
+```
+
+The hosted API key and owner user id come from the same AgentEnvelope account that owns the Domain and delegates. As an alternative to `.env.local`, enter these values in the demonstration's **Setup guide**; that form stores them only in browser `sessionStorage`.
+
+### 6. Run and confirm the connection
+
+Restart the Vite server after changing environment variables or handoff files:
+
+```bash
+npm run dev
+```
+
+The **Portal records** panel should change to `ready`. Run one allowed scenario and confirm the hosted activity progresses through mint, public-record registration, verification and completed outcome. Locally denied identity or scope tests intentionally remain in the simulator's incident evidence and do not mint hosted authority.
+
+`VITE_` values are visible to browser code. This is intentional for a demonstration handoff and is not a production secret-custody design. A production refrigeration gateway should store runtime secrets in its trusted service or device boundary and call the same API routes from there. Never commit a populated `.env.local`, bot keys or mint material.
