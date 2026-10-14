@@ -231,7 +231,6 @@ function buildHostedRecord(config, role, capability, actionEnvelope) {
     actionEnvelope,
     canonicalActionEnvelope,
     actionEnvelopeHash,
-    legitimacyRef: role.delegate.legitimacyRef,
     expiry: new Date(actionEnvelope.timeWindow.notAfter).toISOString(),
   };
 }

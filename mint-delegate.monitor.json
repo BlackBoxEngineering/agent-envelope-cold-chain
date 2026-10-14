@@ -1,11 +1,11 @@
 {
   "type": "agentenvelope.mintDelegate",
   "version": 1,
-  "delegateId": "ae-delegate-ebefd655dda8a237",
+  "delegateId": "ae-delegate-e66c0afd9ccd3ede",
   "legitimacyRef": {
-    "legitimacyId": "ae-legit-f7e7064273fe2bc7",
+    "legitimacyId": "ae-legit-ba1f2d262f8d7d33",
     "stateVersion": 1,
-    "stateHash": "0xc95040f23442c6f7556f5421c2f98a9836431eb2ff78e44efab0e3471063ca92",
+    "stateHash": "0xb42f870e497801fc9b54ad38d6b7cbdb8d7b1778cd297e349656bbec2ef43a93",
     "policyId": "manual-approval",
     "required": true
   },
@@ -23,16 +23,16 @@
   "botPolicy": "any-signed-bot",
   "actionIndexPolicy": {
     "min": 0,
-    "max": 10000
+    "max": 1000
   },
   "maxMints": 500,
   "maxUsesPerAction": 1,
   "timeWindow": {
-    "notBefore": 1791987461736,
-    "notAfter": 1824124620000
+    "notBefore": 1792000902793,
+    "notAfter": 1824137940000
   },
-  "nonce": "0x8c2fa7c29f6c0353c7abf1bfde4c89f2b90fab8db934ab292fd5fc64d0c306d0",
-  "issuedAt": "2026-10-14T14:17:41.736Z",
+  "nonce": "0x4d87126fc58ef05d24db95d180966304d1072d7e3b1b278ea1dd3026b34199af",
+  "issuedAt": "2026-10-14T18:01:42.793Z",
   "domainSummary": {
     "domainInfo": {
       "type": "agentenvelope.domainInfo",
@@ -45,7 +45,7 @@
     "domainHash": "0xb64da23f016d10b94b58f4e8582cae09d1d1ff23aeacac4700e2bb777bd84f99",
     "domainAddress": "0xcd16842a7260e0245a0e6e0f200741057ccd2b50",
     "domainFingerprint": "ae-domain-f0bc061967a98da1",
-    "createdAt": "2026-10-14T14:16:44.152Z"
+    "createdAt": "2026-10-14T17:58:56.819Z"
   },
-  "issuerSignature": "0x9609bf9ade943207861ee46960f6134a5595cd7bf1126a145e0e1a70a55ca043170cc5709094eb0e797ba8ca913778ca4d61d90e89f5bd13925f622e5c7a7b4f1b"
+  "issuerSignature": "0xa6041d70ad5de768543a5219f830b5f1e38ad3d17fc50aa299168fbf8cdba17c0e502c8e18ed876b70cf7fd84a61d5818a2e51268c060a64545ebd7f2ae7c0d41b"
 }

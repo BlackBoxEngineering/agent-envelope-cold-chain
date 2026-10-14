@@ -122,8 +122,6 @@ test("unwraps hosted Lambda responses for the complete portal lifecycle", async 
 
   await expect(page.locator(".hosted-state-pill")).toHaveText("recorded");
   await expect(page.locator(".hosted-records-panel")).toContainText("Temperature monitor was registered, verified and recorded as completed.");
-  expect(registrationRequest.record.legitimacyRef).toMatchObject({
-    legitimacyId: registrationRequest.request.legitimacyId,
-    required: true,
-  });
+  expect(registrationRequest.request.legitimacyId).toMatch(/^ae-legit-/);
+  expect(registrationRequest.record.legitimacyRef).toBeUndefined();
 });
