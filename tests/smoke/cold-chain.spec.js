@@ -88,6 +88,7 @@ test("exposes the optional portal handoff without blocking the local demo", asyn
 
 test("unwraps hosted Lambda responses for the complete portal lifecycle", async ({ page }) => {
   const seed = `0x${"11".repeat(32)}`;
+  let registrationRequest;
   await page.addInitScript(({ seed }) => {
     window.sessionStorage.setItem("agentenvelope:cold-chain-hosted:v1", JSON.stringify({
       apiKey: "test-api-key",
@@ -103,6 +104,9 @@ test("unwraps hosted Lambda responses for the complete portal lifecycle", async 
 
   await page.route("https://jemdjwteae.execute-api.us-east-1.amazonaws.com/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/sovereign/agents/register-delegated") {
+      registrationRequest = route.request().postDataJSON();
+    }
     const responses = {
       "/v1/sovereign/mint": { statusCode: 200, body: JSON.stringify({ mintId: "test-mint" }) },
       "/v1/sovereign/agents/register-delegated": { statusCode: 201, body: JSON.stringify({ delegated: true }) },
@@ -118,4 +122,8 @@ test("unwraps hosted Lambda responses for the complete portal lifecycle", async 
 
   await expect(page.locator(".hosted-state-pill")).toHaveText("recorded");
   await expect(page.locator(".hosted-records-panel")).toContainText("Temperature monitor was registered, verified and recorded as completed.");
+  expect(registrationRequest.record.legitimacyRef).toMatchObject({
+    legitimacyId: registrationRequest.request.legitimacyId,
+    required: true,
+  });
 });
