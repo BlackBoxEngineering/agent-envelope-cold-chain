@@ -373,7 +373,26 @@ async function hostedJson(path, apiKey, body) {
     // The status code remains authoritative when the response has no JSON body.
   }
   if (!response.ok) throw new Error(responseBody?.error || responseBody?.message || `Hosted request failed with ${response.status}.`);
-  return responseBody;
+  const proxy = unwrapProxyResponse(responseBody);
+  if (proxy && proxy.status >= 400) {
+    throw new Error(proxy.body?.error || proxy.body?.message || `Hosted request failed with ${proxy.status}.`);
+  }
+  return proxy ? proxy.body : responseBody;
+}
+
+function unwrapProxyResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !Number.isInteger(value.statusCode) || !("body" in value)) {
+    return null;
+  }
+  let body = value.body;
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      body = { message: body };
+    }
+  }
+  return { status: value.statusCode, body };
 }
 
 export {

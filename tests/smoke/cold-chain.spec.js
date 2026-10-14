@@ -85,3 +85,37 @@ test("exposes the optional portal handoff without blocking the local demo", asyn
   expect(overflow).toBeLessThanOrEqual(1);
   expect(errors).toEqual([]);
 });
+
+test("unwraps hosted Lambda responses for the complete portal lifecycle", async ({ page }) => {
+  const seed = `0x${"11".repeat(32)}`;
+  await page.addInitScript(({ seed }) => {
+    window.sessionStorage.setItem("agentenvelope:cold-chain-hosted:v1", JSON.stringify({
+      apiKey: "test-api-key",
+      ownerUserId: "test-owner",
+      monitorBotKey: seed,
+      monitorMintMaterial: seed,
+      dispatchBotKey: seed,
+      dispatchMintMaterial: seed,
+      engineerBotKey: seed,
+      engineerMintMaterial: seed,
+    }));
+  }, { seed });
+
+  await page.route("https://jemdjwteae.execute-api.us-east-1.amazonaws.com/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const responses = {
+      "/v1/sovereign/mint": { statusCode: 200, body: JSON.stringify({ mintId: "test-mint" }) },
+      "/v1/sovereign/agents/register-delegated": { statusCode: 201, body: JSON.stringify({ delegated: true }) },
+      "/v1/sovereign/verify": { statusCode: 200, body: JSON.stringify({ type: "agentenvelope.sovereignVerificationReport", valid: true }) },
+      "/v1/sovereign/outcomes": { statusCode: 200, body: JSON.stringify({ accepted: true }) },
+    };
+    await route.fulfill({ json: responses[path] ?? { statusCode: 404, body: JSON.stringify({ error: "not found" }) } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start system" }).click();
+  await page.getByRole("button", { name: /Normal alert/i }).click();
+
+  await expect(page.locator(".hosted-state-pill")).toHaveText("recorded");
+  await expect(page.locator(".hosted-records-panel")).toContainText("Temperature monitor was registered, verified and recorded as completed.");
+});
