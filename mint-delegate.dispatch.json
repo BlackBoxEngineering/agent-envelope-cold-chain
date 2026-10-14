@@ -1,1 +1,51 @@
-{}
+{
+  "type": "agentenvelope.mintDelegate",
+  "version": 1,
+  "delegateId": "ae-delegate-caaf167824d59094",
+  "legitimacyRef": {
+    "legitimacyId": "ae-legit-2c2b2a62be89b9f8",
+    "stateVersion": 1,
+    "stateHash": "0x7fcd8b7dae8dedd7f200e430a5f14f08dea8fba5605b4fe2dd444cb835b4f34a",
+    "policyId": "manual-approval",
+    "required": true
+  },
+  "issuerAddress": "0xcd16842a7260e0245a0e6e0f200741057ccd2b50",
+  "avatarAddress": "0x51396c3f1e1a210357132fdf6c196866e3dc5651",
+  "domainHash": "0xb64da23f016d10b94b58f4e8582cae09d1d1ff23aeacac4700e2bb777bd84f99",
+  "allowedOperations": [
+    "dispatch_contractor"
+  ],
+  "allowedResources": [
+    "contractor:approved-refrigeration",
+    "store:184",
+    "zone:chilled-03"
+  ],
+  "botPolicy": "any-signed-bot",
+  "actionIndexPolicy": {
+    "min": 0,
+    "max": 1000
+  },
+  "maxMints": 500,
+  "maxUsesPerAction": 1,
+  "timeWindow": {
+    "notBefore": 1791946123328,
+    "notAfter": 1824082980000
+  },
+  "nonce": "0x9419874d9f64dffe8129544e5001341cae496656fcc424cd0c33bdb8ee99709c",
+  "issuedAt": "2026-10-14T02:48:43.328Z",
+  "domainSummary": {
+    "domainInfo": {
+      "type": "agentenvelope.domainInfo",
+      "version": 1,
+      "namespace": "cold-chain",
+      "domainId": "refrigeration-control",
+      "kind": "infrastructure"
+    },
+    "canonicalDomainInfo": "{\"domainId\":\"refrigeration-control\",\"kind\":\"infrastructure\",\"namespace\":\"cold-chain\",\"type\":\"agentenvelope.domainInfo\",\"version\":1}",
+    "domainHash": "0xb64da23f016d10b94b58f4e8582cae09d1d1ff23aeacac4700e2bb777bd84f99",
+    "domainAddress": "0xcd16842a7260e0245a0e6e0f200741057ccd2b50",
+    "domainFingerprint": "ae-domain-f0bc061967a98da1",
+    "createdAt": "2026-10-14T01:09:25.143Z"
+  },
+  "issuerSignature": "0x1dcad5b14652f265eebcdc9ce6dc10602b6c0b4f5463cd41abae9ec679680cf67cbee6836bac8c5a7eaca631fb7da01f707293eb2115c2a34184e1fccff957661b"
+}

@@ -1,1 +1,51 @@
-{}
+{
+  "type": "agentenvelope.mintDelegate",
+  "version": 1,
+  "delegateId": "ae-delegate-ded9884218eef9bb",
+  "legitimacyRef": {
+    "legitimacyId": "ae-legit-493c2ecc00206e69",
+    "stateVersion": 1,
+    "stateHash": "0x2ffbeb6b2f104421d4a802201d133e24da4469b371223946471349144578e29e",
+    "policyId": "manual-approval",
+    "required": true
+  },
+  "issuerAddress": "0xcd16842a7260e0245a0e6e0f200741057ccd2b50",
+  "avatarAddress": "0x51396c3f1e1a210357132fdf6c196866e3dc5651",
+  "domainHash": "0xb64da23f016d10b94b58f4e8582cae09d1d1ff23aeacac4700e2bb777bd84f99",
+  "allowedOperations": [
+    "alert_engineer",
+    "read_temperature"
+  ],
+  "allowedResources": [
+    "store:184",
+    "zone:chilled-03"
+  ],
+  "botPolicy": "any-signed-bot",
+  "actionIndexPolicy": {
+    "min": 0,
+    "max": 1000
+  },
+  "maxMints": 500,
+  "maxUsesPerAction": 1,
+  "timeWindow": {
+    "notBefore": 1791945903398,
+    "notAfter": 1824082980000
+  },
+  "nonce": "0xa1c608b0a7d9804b8237dc7c4bf33cc86b26898751c54595862a596873d45e3d",
+  "issuedAt": "2026-10-14T02:45:03.398Z",
+  "domainSummary": {
+    "domainInfo": {
+      "type": "agentenvelope.domainInfo",
+      "version": 1,
+      "namespace": "cold-chain",
+      "domainId": "refrigeration-control",
+      "kind": "infrastructure"
+    },
+    "canonicalDomainInfo": "{\"domainId\":\"refrigeration-control\",\"kind\":\"infrastructure\",\"namespace\":\"cold-chain\",\"type\":\"agentenvelope.domainInfo\",\"version\":1}",
+    "domainHash": "0xb64da23f016d10b94b58f4e8582cae09d1d1ff23aeacac4700e2bb777bd84f99",
+    "domainAddress": "0xcd16842a7260e0245a0e6e0f200741057ccd2b50",
+    "domainFingerprint": "ae-domain-f0bc061967a98da1",
+    "createdAt": "2026-10-14T01:09:25.143Z"
+  },
+  "issuerSignature": "0x442d84d153e12749e46f87b7f6963a3848e317f65ca97f4991dcac5883f92ae403ef760a3da263e266b6911d4e4d620d81138cdc0f8533e2991cb16d94f10e6b1b"
+}

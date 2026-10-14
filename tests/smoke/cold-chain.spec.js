@@ -78,7 +78,7 @@ test("exposes the optional portal handoff without blocking the local demo", asyn
   await expect(page.getByText("Temperature monitor", { exact: true })).toBeVisible();
   await expect(page.getByText("Maintenance dispatch", { exact: true })).toBeVisible();
   await expect(page.getByText("Site engineer controller", { exact: true })).toBeVisible();
-  await expect(page.locator(".hosted-setup-footer").getByText(/replace mint-delegate\.monitor\.json/i)).toBeVisible();
+  await expect(page.locator(".hosted-role summary em")).toHaveText(["ready", "ready", "ready"]);
   await expect(page.getByRole("button", { name: "Save session" })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
