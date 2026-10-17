@@ -1,6 +1,6 @@
 # AgentEnvelope Cold Chain
 
-A simulated hosted AgentEnvelope demonstration of sovereign derived authority for connected refrigeration systems. It runs locally by default and can be connected to the real hosted mint, record, verification and completed-outcome routes with portal-created delegates.
+A client-execution simulator for AgentEnvelope refrigeration authority. It defaults to offline SDK verification plus explicit local execution policy. Optional hosted mode requires mint, registration and verification approval **before** the simulated effect. This is a test harness, not a production refrigeration controller.
 
 > **Stop the command. Preserve the evidence. End the blame game.**
 
@@ -46,7 +46,9 @@ The hosted service can verify, govern, record and witness authority. It cannot i
 
 ## Simulated and hosted command flow
 
-The local simulator contains deterministic demonstration authority so every scenario works without an account or network connection. For the optional hosted path, use the portal to create the cold-chain Domain and three runtime delegates:
+The local issuer uses public deterministic demo keys, but creates a distinct command ID and a fresh, finite `BOTH` envelope for each new event. Each capability declares `maxUses: 1`. The client persists and serializes consumption; the SDK verifier does not spend that allowance. Offline issuance is an unrestricted demo fixture, not enforcement of a shared hosted `maxMints` budget.
+
+For the optional hosted path, use the portal to create the cold-chain Domain and three runtime delegates:
 
 - **Temperature monitor** — may read temperatures and alert an engineer.
 - **Maintenance dispatch** — may dispatch an approved refrigeration contractor.
@@ -54,15 +56,19 @@ The local simulator contains deterministic demonstration authority so every scen
 
 Each runtime delegate is bounded by its signed operations, resources, action-index range, mint limits, time window and required legitimacy reference. The browser receives only the signed handoff, runtime bot key and one-time mint material; it never receives the Vault root or Domain seed.
 
-For each locally allowed action, the connected demonstration then:
+Select **Hosted approval required** explicitly; entering credentials alone does not enable it. For each locally eligible command, the demonstration:
 
-1. Builds and signs a `MintRequest` against the matching portal delegate.
-2. Calls `/sovereign/mint`, where hosted governance checks delegate signature, scope, replay, mint limits and current legitimacy.
-3. Derives the one-use action capability locally from the handoff material.
-4. Registers a seedless `PublicActionRecord` through `/sovereign/agents/register-delegated`.
-5. Signs the cold-chain command with the derived action seed and verifies it through `/sovereign/verify`.
-6. Signs a separate `agentenvelope.executionOutcome` after the simulated action completes and submits it through `/sovereign/outcomes`.
-7. The backend attempts the configured AgentEnvelope witness append for verification and completion. When enabled for that account, external witness and MIR processing happen behind the API.
+1. Builds and signs one `MintRequest` against the matching portal delegate, preserving the original command's expiry and intersecting its dates with the delegate window.
+2. Derives the public action record and signed command locally. Persists their exact request/nonce and record before making any network call. Private derivability is not proof of hosted admission.
+3. Requires a matching approval from `/sovereign/mint`, then accepted registration from `/sovereign/agents/register-delegated`.
+4. Requires a valid report from `/sovereign/verify`; rechecks local authority, expiry, scope, legitimacy and remaining uses after the asynchronous calls.
+5. Persists an execution reservation before applying the simulated effect. A reserved but unresolved attempt is never automatically replayed or refunded.
+6. Saves a separate signed simulator completion receipt. Only then signs and submits `agentenvelope.executionOutcome` through `/sovereign/outcomes`.
+7. Displays the returned reporting status without calling `accepted: true` a witness proof. Witness/MIR behaviour remains conditional on backend configuration and returned evidence.
+
+Mint, registration or verification rejection blocks execution. A reporting failure **after** execution leaves a completed command with a pending report. Retrying the report does not execute, mint, or refresh the command's time window.
+
+If a mint response is lost, the identical persisted request can be retried. A duplicate-nonce response is not treated as approval; the demo stays blocked. The current API does not provide recovery of the original mint-approval receipt. Issuing a fresh nonce would consume another mint, so this harness never does that automatically.
 
 The demo does not mint a hosted capability for a command that already failed local identity or exact-scope admission. Those denied attempts remain in its local signed decision evidence and hash-linked incident sequence. The hosted verifier itself can record a denied verification when a registered record is found but its submitted action fails verification; that is a different boundary from an unknown or locally rejected command.
 
@@ -70,9 +76,25 @@ API keys provide access to the hosted service. They are not authority.
 
 ## Live demonstration
 
-Press **Start system** to bring the refrigeration loop online and continuously report the temperature of Chilled Zone 03. Once it is live, each operational event is itself the trigger: select a compressor fault, an unauthorised 50°C defrost attempt or a legitimate command and watch the system respond without a second submission step.
+Press **Start system**, choose a mode and optional break point in **Execution and recovery lab**, then select an operational event. Selecting an event explicitly loads its incident temperature and issues a new command; it is not passive sensor monitoring. There is no background cooling or automatic repair timer. Dispatching a contractor does not restore refrigeration; **Authorised recovery** is a separate, explicitly issued control command.
 
-Each request pauses at the AgentEnvelope gateway while its signature, public authority record and exact Action Envelope scope are checked; the demo also shows whether a legitimacy reference is present. The cold-chain integration canonically projects safety-relevant values into resources instead of trusting caller-supplied labels. AgentEnvelope admission then requires an exact match with the immutable Action Envelope. Rejected commands never reach the controller, but still leave signed decision evidence. A compressor fault progresses into a separately authorised site-engineer recovery, so the viewer can watch the safe setpoint return and see both decisions added to the linked evidence trail.
+The SDK checks the signed record and time window. The cold-chain client binds the actual operation, store, zone, value and unit to the signed envelope instead of trusting caller-supplied resource labels. It separately checks a current, versioned local legitimacy policy and remaining uses. **Suspend local legitimacy** changes this local policy only; it does not revoke hosted records or update portal legitimacy. Hosted mode additionally requires the backend's current verification decision.
+
+### Restart and receipt experiments
+
+| Break point | Stored condition | Safe next step |
+| --- | --- | --- |
+| Before read | Queued, no admission checks or use reservation | Reload, start, run the same selected command if still eligible |
+| After read | Received, not started | Recheck current rules and run the same command |
+| After reservation / before effect | Reserved, outcome uncertain after interruption | Halt the zone and investigate; no automatic refund or retry |
+| After effect / before receipt saved | Effect happened in the simulator, no durable completion receipt | Halt the zone; absence of a receipt is not proof of non-execution |
+| After receipt saved / reply lost | Completed, caller missing receipt | Retrieve the saved receipt; never execute again |
+
+Use the five-second validity option to demonstrate expiry during downtime. Changing the controls affects new commands only, not the selected stored command. A completed command remains consumed after reload. Receipt retrieval is historical and works after authority expiry; it grants no new execution permission. Hosted reporting can still fail after expiry or a legitimacy change because the existing backend validates the report against current authority. The local receipt remains available; this demo does not change that API behaviour.
+
+Commands, use reservations, receipts and the local evidence chain survive reload in `localStorage`. Web Locks serialize same-origin tabs. Unsupported locks, corrupt storage and failed reservation writes block execution. An unresolved attempt blocks new work for this demo zone. **Reset** explicitly clears the local sandbox only; it does not revoke existing hosted capabilities, refund budgets or reconcile a real device.
+
+This is deliberately a browser simulation: storage is editable/clearable, keys are demo or browser-held credentials, devices/origins do not share counters, and no physically atomic effect-plus-receipt guarantee is claimed. Production needs trusted device/service custody, durable consumption state shared by all relevant executors, and an operational reconciliation process for uncertain effects.
 
 ## Evidence, not arguments
 
@@ -82,13 +104,13 @@ Every command submitted through the simulated trusted gateway produces locally s
 - the signer address;
 - the matching public authority record;
 - the Action Envelope hash;
-- the scope decision and legitimacy reference;
-- the allow or deny reason; and
+- the client scope, current local legitimacy and remaining-use checks;
+- the allow, deny, pause or receipt-retrieval reason; and
 - the decision time.
 
 The simulator then wraps each decision and optional outcome hash in a separate local hash-linked sequence entry containing the preceding entry hash. The decision signature and the sequence link are deliberately not described as the same object.
 
-Allowed commands add a separately signed execution outcome. Denied commands record that execution was not attempted.
+Only completed simulations add a separately signed execution outcome. An admitted command can still stop before completion. A refused duplicate may refer to an earlier completed effect; rejection does not erase history. A pre-read interruption is recorded by the harness with admission checks explicitly left unperformed.
 
 ```text
 Command attempt
@@ -112,10 +134,10 @@ The resulting evidence distinguishes:
 - who submitted the command;
 - which authority it carried;
 - why it was accepted or rejected;
-- whether the controller executed it; and
+- whether the simulator has a stored completion receipt (unknown is a separate state); and
 - whether links within the exported sequence remain intact.
 
-The local simulator signs its own decisions with deterministic demo keys and does not call hosted services until valid portal handoffs and credentials are configured. Once connected, an allowed simulator action also follows the real hosted mint, delegated registration, verification and execution-outcome routes. The backend attempts its configured verification and completion witness appends; whether AILeash or MIR is enabled is account and backend configuration, not a claim the browser can make by itself.
+The local simulator signs its own decisions with public demo keys. Its hash chain demonstrates linking, not independent authenticity, tamper-resistant custody or proof of physical execution. No hosted service is called unless hosted mode is explicitly selected. In that mode the backend attempts its configured verification and completion witness appends; whether AILeash or MIR is enabled is account and backend configuration, not a claim the browser can make by itself.
 
 Those roles are deliberately separate. MIR does not custody the AgentEnvelope head, and an authority check alone sends nothing to MIR. Locally denied attempts remain in this demo's local evidence sequence. MIR receives only completed outcomes submitted to `/sovereign/outcomes`, and only when the backend MIR integration is enabled. The current AgentEnvelope verifier does not use MIR history as an admission-time behaviour signal.
 
@@ -128,7 +150,7 @@ The chain also records only what arrived. It does not prove that a temperature r
 - **50°C attack:** an unknown signer attempts forced high-temperature defrost. The command is denied and added to the local evidence chain.
 - **Correct, no authority:** a read-only monitor proposes the correct 4°C value but cannot issue a control command.
 - **Authorised recovery:** the site engineer restores the safe setpoint; admission and completion are recorded separately.
-- **Scope breakout attempt:** a known site-engineer signer requests an eight-hour defrost cycle while presenting the permitted one-hour resource label. The command projects to `duration:8h`, which does not match its immutable `duration:1h` Action Envelope. AgentEnvelope accepts the identity and signature but denies the out-of-scope command; execution is recorded as not attempted.
+- **Scope breakout attempt:** a known site-engineer signer requests an eight-hour defrost cycle while presenting the permitted one-hour resource label. The client projects the actual value to `duration:8h`, which does not match its immutable `duration:1h` Action Envelope. SDK signature verification passes, but the client scope adapter denies execution.
 
 ```text
 Knowledge ≠ Authority
@@ -143,8 +165,11 @@ npm run dev
 
 ```bash
 npm run build
+npm test
 npm run test:smoke
 ```
+
+Unit tests exercise the real SDK and local executor. Browser tests mock hosted responses and block external traffic; they are not deployed-backend tests. Playwright uses the installed Edge browser on Windows (see `playwright.config.js`).
 
 ## Connect the hosted portal
 
@@ -242,6 +267,6 @@ Restart the Vite server after changing environment variables or handoff files:
 npm run dev
 ```
 
-The **Portal records** panel should change to `ready`. Run one allowed scenario and confirm the hosted activity progresses through mint, public-record registration, verification and completed outcome. Locally denied identity or scope tests intentionally remain in the simulator's incident evidence and do not mint hosted authority.
+Check the setup's role readiness, then explicitly select **Hosted approval required** in the run controls. Run one allowed scenario and confirm that mint, registration and verification succeed before the simulator acts. The **Portal records** panel then shows whether the completion report was accepted or remains pending. Locally denied identity or scope tests intentionally remain in the simulator's incident evidence and do not mint hosted authority. Real hosted runs consume the delegate's mint budget; use a dedicated test account and bounded test delegates.
 
 `VITE_` values are visible to browser code. This is intentional for a demonstration handoff and is not a production secret-custody design. A production refrigeration gateway should store runtime secrets in its trusted service or device boundary and call the same API routes from there. Never commit a populated `.env.local`, bot keys or mint material.

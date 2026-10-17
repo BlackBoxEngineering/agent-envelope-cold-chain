@@ -5,7 +5,6 @@ import {
   hexToBytes,
   mintActionCapability,
   signAction,
-  verifyAction,
   verifyMintDelegate,
   verifyMintRequest,
 } from "agent-envelope-sdk";
@@ -235,122 +234,121 @@ function buildHostedRecord(config, role, capability, actionEnvelope) {
   };
 }
 
-async function publishHostedColdChainResult(config, result) {
+// Preparation is persisted BEFORE any network call. Retrying keeps this exact
+// request/nonce/record; it never silently mints a replacement.
+function prepareHostedCommand(config, result) {
   const readiness = hostedResultStatus(config, result);
   if (!readiness.ready) throw new Error(readiness.message);
   const role = roleForResult(result);
   const delegate = roleValidation(role).delegate;
   const actionIndex = nextActionIndex(role, delegate);
+  const originalWindow = result.record.actionEnvelope.timeWindow;
   const now = Date.now();
   const timeWindow = {
-    notBefore: now - 30_000,
-    notAfter: Math.min(now + 5 * 60_000, delegate.timeWindow?.notAfter ?? now + 5 * 60_000),
+    notBefore: Math.max(originalWindow.notBefore, delegate.timeWindow?.notBefore ?? originalWindow.notBefore),
+    notAfter: Math.min(originalWindow.notAfter, delegate.timeWindow?.notAfter ?? originalWindow.notAfter),
   };
-  if (timeWindow.notAfter <= timeWindow.notBefore) throw new Error(`${role.label} delegate has expired.`);
+  if (timeWindow.notAfter <= now || timeWindow.notAfter <= timeWindow.notBefore) throw new Error("Command or delegate has expired; no replacement authority is issued.");
   const actionEnvelope = buildHostedEnvelope(role, result, actionIndex, timeWindow);
-  const botKey = hexToBytes(config[`${role.id}BotKey`].trim());
+  const botKey = hexToBytes(config[role.id + "BotKey"].trim());
   let request;
   try {
     request = buildMintRequest(botKey, delegate, {
-      agentId: actionEnvelope.agentId,
-      operation: actionEnvelope.operation,
-      resources: actionEnvelope.resources,
-      actionIndex,
-      maxUses: 1,
-      timeWindow,
-      nonce: crypto.randomUUID(),
-      requestedAt: new Date().toISOString(),
+      agentId: actionEnvelope.agentId, operation: actionEnvelope.operation,
+      resources: actionEnvelope.resources, actionIndex, maxUses: 1, timeWindow,
+      nonce: crypto.randomUUID(), requestedAt: new Date().toISOString(),
       legitimacyId: delegate.legitimacyRef.legitimacyId,
     });
-  } finally {
-    botKey.fill(0);
-  }
-  const requestCheck = verifyMintRequest(request, delegate);
-  if (!requestCheck.valid) throw new Error(`Mint request failed local verification: ${requestCheck.reason}`);
-
-  const receipt = await hostedJson("/sovereign/mint", config.apiKey, { delegate, request });
-  const mintMaterial = hexToBytes(config[`${role.id}MintMaterial`].trim());
+  } finally { botKey.fill(0); }
+  const check = verifyMintRequest(request, delegate);
+  if (!check.valid) throw new Error("Mint request failed local verification: " + check.reason);
+  const material = hexToBytes(config[role.id + "MintMaterial"].trim());
   let capability;
-  try {
-    capability = mintActionCapability(mintMaterial, delegate, request);
-  } finally {
-    mintMaterial.fill(0);
-  }
+  try { capability = mintActionCapability(material, delegate, request); }
+  finally { material.fill(0); }
   const record = buildHostedRecord(config, role, capability, actionEnvelope);
-  if (receipt?.agentAddress && receipt.agentAddress.toLowerCase() !== capability.agentAddress.toLowerCase()) {
-    throw new Error("Hosted mint address does not match the locally derived capability.");
-  }
-  if (receipt?.actionEnvelopeHash && receipt.actionEnvelopeHash.toLowerCase() !== record.actionEnvelopeHash.toLowerCase()) {
-    throw new Error("Hosted mint envelope hash does not match the local record.");
-  }
-
-  const actionPayload = {
-    ...result.payload,
-    publicActionRecordId: record.recordId,
-    actionEnvelopeHash: record.actionEnvelopeHash,
-    hosted: true,
-    hostedReceiptId: receipt.mintId || receipt.receiptId || receipt.requestId,
+  const payload = {
+    ...result.payload, publicActionRecordId: record.recordId,
+    actionEnvelopeHash: record.actionEnvelopeHash, hosted: true,
   };
   const actionSeed = hexToBytes(capability.actionSeedHex);
-  let actionSignature;
-  let outcomeSignature;
-  const correlationId = `ae.cold.${contentHash({ recordId: record.recordId, actionIndex }).slice(2, 34)}`;
-  const outcome = {
-    type: "agentenvelope.executionOutcome",
-    version: 1,
-    status: "completed",
-    recordId: record.recordId,
-    actionIndex,
-    correlationId,
-    actionHash: contentHash(actionPayload),
-    completedAt: new Date().toISOString(),
-  };
-  try {
-    actionSignature = signAction(actionSeed, actionPayload);
-    outcomeSignature = signAction(actionSeed, outcome);
-  } finally {
-    actionSeed.fill(0);
-  }
-  const signatureCheck = verifyAction({ message: actionPayload, signature: actionSignature, expectedAddress: capability.agentAddress });
-  if (!signatureCheck.valid) throw new Error("Hosted action signature failed local verification.");
-
-  const registration = await hostedJson("/sovereign/agents/register-delegated", config.apiKey, {
-    record,
-    request,
-    delegateId: delegate.delegateId,
-  });
-  const report = await hostedJson("/sovereign/verify", config.apiKey, {
-    recordId: record.recordId,
-    agentId: record.agentId,
-    actionIndex,
-    payload: actionPayload,
-    signature: actionSignature,
-    expectedActionEnvelopeHash: record.actionEnvelopeHash,
-    correlationId,
-  });
-  if (!report.valid) throw new Error(report.reason || "Hosted verification denied the action.");
-  const outcomeReceipt = await hostedJson("/sovereign/outcomes", config.apiKey, {
-    recordId: record.recordId,
-    actionIndex,
-    correlationId,
-    actionPayload,
-    actionSignature,
-    outcome,
-    outcomeSignature,
-    expectedActionEnvelopeHash: record.actionEnvelopeHash,
-  });
+  let signature;
+  try { signature = signAction(actionSeed, payload); }
+  finally { actionSeed.fill(0); }
+  const correlationId = "ae.cold." + contentHash({ recordId: record.recordId, commandId: payload.commandId }).slice(2, 34);
   return {
-    roleId: role.id,
-    roleLabel: role.label,
-    record,
-    registration,
-    report,
-    outcomeReceipt,
-    links: {
-      record: `https://agentenvelope.io/records/${record.recordId}`,
-      ledger: "https://agentenvelope.io/ledger?tab=activity",
-    },
+    roleId: role.id, roleLabel: role.label, delegate, request, correlationId,
+    packet: { scenario: result.scenario, payload, signature, record },
+    admitted: false, registered: false, report: null,
   };
+}
+
+async function admitHostedCommand(config, context, checkpoint) {
+  const { packet, request, delegate } = context;
+  if (!context.admitted) {
+    // A lost approval response stays unresolved. Duplicate 409 is not silently
+    // re-minted; operator investigation is required until receipt recovery exists.
+    context.mintReceipt = await hostedJson("/sovereign/mint", config.apiKey, { delegate, request });
+    if (context.mintReceipt?.valid !== true ||
+        context.mintReceipt.delegateId !== delegate.delegateId ||
+        context.mintReceipt.requestId !== request.requestId) {
+      throw new Error("Hosted mint did not return a matching approval.");
+    }
+    context.admitted = true;
+    checkpoint(context);
+  }
+  if (!context.registered) {
+    context.registration = await hostedJson("/sovereign/agents/register-delegated", config.apiKey, {
+      record: packet.record, request, delegateId: delegate.delegateId,
+    });
+    if (context.registration?.accepted !== true) throw new Error("Hosted registration was not accepted.");
+    context.registered = true;
+    checkpoint(context);
+  }
+  // Re-evaluate live hosted legitimacy on every attempt, not just first issuance.
+  context.report = await hostedJson("/sovereign/verify", config.apiKey, {
+    recordId: packet.record.recordId, agentId: packet.record.agentId,
+    actionIndex: packet.record.actionEnvelope.actionIndex, payload: packet.payload,
+    signature: packet.signature, expectedActionEnvelopeHash: packet.record.actionEnvelopeHash,
+    correlationId: context.correlationId,
+  });
+  if (context.report?.valid !== true) throw new Error(context.report?.reason || "Hosted verification denied the action.");
+  checkpoint(context);
+  return context;
+}
+
+// Reporting never executes a command and never mints authority. Failed reporting
+// retains the same completed receipt and identifiers for a later submission.
+async function submitHostedCompletion(config, context, receipt) {
+  if (receipt?.status !== "completed" || receipt.commandHash !== contentHash(context.packet.payload)) {
+    throw new Error("A matching completed executor receipt is required.");
+  }
+  const role = ROLE_DEFINITIONS.find((candidate) => candidate.id === context.roleId);
+  const material = hexToBytes(config[role.id + "MintMaterial"].trim());
+  let capability;
+  try { capability = mintActionCapability(material, context.delegate, context.request); }
+  finally { material.fill(0); }
+  if (capability.agentAddress.toLowerCase() !== context.packet.record.agentAddress.toLowerCase()) {
+    throw new Error("The current mint material does not match the completed authority.");
+  }
+  const outcome = {
+    type: "agentenvelope.executionOutcome", version: 1, status: "completed",
+    recordId: context.packet.record.recordId,
+    actionIndex: context.packet.record.actionEnvelope.actionIndex,
+    correlationId: context.correlationId, actionHash: contentHash(context.packet.payload),
+    completedAt: receipt.completedAt,
+  };
+  const actionSeed = hexToBytes(capability.actionSeedHex);
+  let outcomeSignature;
+  try { outcomeSignature = signAction(actionSeed, outcome); }
+  finally { actionSeed.fill(0); }
+  const result = await hostedJson("/sovereign/outcomes", config.apiKey, {
+    recordId: outcome.recordId, actionIndex: outcome.actionIndex, correlationId: outcome.correlationId,
+    actionPayload: context.packet.payload, actionSignature: context.packet.signature,
+    outcome, outcomeSignature, expectedActionEnvelopeHash: context.packet.record.actionEnvelopeHash,
+  });
+  if (result?.accepted !== true) throw new Error("Hosted completion report was not accepted.");
+  return result;
 }
 
 async function hostedJson(path, apiKey, body) {
@@ -401,6 +399,8 @@ export {
   hostedResultStatus,
   hostedRoleSummaries,
   initialHostedConfig,
-  publishHostedColdChainResult,
+  prepareHostedCommand,
+  admitHostedCommand,
+  submitHostedCompletion,
   saveHostedConfig,
 };

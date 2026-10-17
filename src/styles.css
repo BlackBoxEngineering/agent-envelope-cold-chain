@@ -64,7 +64,7 @@ button { color: inherit; }
 
 .workspace { flex: 1; display: grid; grid-template-columns: minmax(245px, 300px) minmax(510px, 1fr) minmax(260px, 320px); gap: 14px; padding: 14px; max-width: 1800px; width: 100%; margin: 0 auto; }
 .side-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.center-panel { display: grid; grid-template-rows: auto minmax(420px, 1fr) auto; gap: 12px; min-width: 0; }
+.center-panel { display: grid; grid-template-rows: auto minmax(420px, auto) auto; gap: 12px; min-width: 0; align-self: start; }
 .panel, .authority-flow, .cold-room, .timeline-panel, .domain-card, .authority-cards article, .large-empty, .evidence-table-wrap, .evidence-boundary, .claim-box { border: 1px solid var(--line); background: rgba(10, 24, 29, .94); box-shadow: var(--shadow); }
 .panel { padding: 16px; }
 .panel-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -303,6 +303,17 @@ dd { margin: 0; text-align: right; font-size: 10px; color: #e7f5f5; }
 
 footer { min-height: 42px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; padding: 12px 20px; display: flex; justify-content: center; align-items: center; gap: 9px; }
 .footer-separator { color: var(--cyan); }
+
+.execution-controls { padding: 16px; }
+.execution-controls p, .execution-controls small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.execution-controls label { display: block; margin: 12px 0; font-size: 11px; }
+.execution-controls select { display: block; width: 100%; min-width: 0; margin-top: 6px; padding: 8px; background: var(--panel, #10202a); color: var(--text, #eef5f8); border: 1px solid var(--line); }
+.execution-controls button { padding: 9px; background: #142a33; color: var(--text, #eef5f8); border: 1px solid var(--line); cursor: pointer; font-size: 11px; }
+.execution-controls button:disabled { opacity: .5; cursor: not-allowed; }
+.execution-buttons { display: grid; gap: 7px; margin: 12px 0; }
+.execution-controls dd { overflow-wrap: anywhere; }
+.execution-controls [role=alert] { color: #ffb2a7; }
+.decision-panel.paused, .decision-panel.recorded { border-color: var(--amber); }
 
 @media (max-width: 1180px) {
   .toolbar { grid-template-columns: 1fr auto; }

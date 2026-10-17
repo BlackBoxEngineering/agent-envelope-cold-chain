@@ -67,21 +67,21 @@ const authorityDefinitions = Object.freeze({
   }),
 });
 
-function createAuthority(definition) {
+function createAuthority(definition, { commandId = 'template', now = Date.now(), validityMs = 300_000 } = {}) {
   const envelope = buildActionEnvelope(domain, {
-    agentId: definition.agentId,
+    agentId: `${definition.agentId}-${commandId}`,
     actionIndex: definition.actionIndex,
     operation: definition.operation,
     resources: definition.resources,
-    notBefore: null,
-    notAfter: null,
-    decayMode: "ACTION",
+    notBefore: now - 1000,
+    notAfter: now + validityMs,
+    decayMode: "BOTH",
     maxUses: 1,
   });
-  const capability = deriveAgentActionCapability(identityRoot, domain, envelope, new Date(DEMO_TIME));
+  const capability = deriveAgentActionCapability(identityRoot, domain, envelope, new Date(now));
   const record = createPublicActionRecord(capability, {
     ownerUserId: OWNER_ID,
-    createdAt: new Date(DEMO_TIME),
+    createdAt: new Date(now),
     legitimacyRef: {
       legitimacyId: `cold-chain-${definition.actionIndex}`,
       policyId: "cold-chain-operational-authority-v1",
@@ -221,11 +221,11 @@ function signWithCapability(capability, payload) {
   }
 }
 
-function commandPayload(scenario) {
+function commandPayload(scenario, commandId, now) {
   return {
     type: "agentenvelope.coldChainCommand",
     version: 1,
-    commandId: `cold-${scenario.id}-001`,
+    commandId,
     storeId: "store-184",
     zoneId: "chilled-03",
     operation: scenario.command.operation,
@@ -234,13 +234,16 @@ function commandPayload(scenario) {
     unit: scenario.command.unit ?? null,
     reason: scenario.command.reason,
     issuedBy: scenario.source,
-    issuedAt: DEMO_TIME,
+    issuedAt: new Date(now).toISOString(),
   };
 }
 
 function verifyAgentEnvelopeScope(record, payload) {
   if (!record) return { valid: false, reasonCode: "authority.not_found", reason: "No matching Public Action Record exists." };
   const envelope = record.actionEnvelope;
+  if (!envelope.resources.some(resource => resource.startsWith('store:') && payload.storeId === `store-${resource.slice(6)}`) || !envelope.resources.includes(`zone:${payload.zoneId}`)) {
+    return { valid: false, reasonCode: 'authority.target_denied', reason: 'The payload target is outside the signed store/zone scope.' };
+  }
   if (envelope.operation !== payload.operation) {
     return {
       valid: false,
@@ -299,85 +302,76 @@ function scopedParameterResource(payload) {
   return { valid: true, resource: null };
 }
 
-function decisionEvidence({ scenario, payload, signature, record, verification, scope, decision }) {
-  const body = {
-    type: "coldchain.decisionEvidence",
-    version: 1,
-    decisionId: `AE-${contentHash({ scenario: scenario.id, payload }).slice(2, 10).toUpperCase()}`,
-    commandId: payload.commandId,
-    decision,
-    reasonCode: decision === "allowed" ? "authority.verified" : scope.reasonCode,
-    reason: decision === "allowed" ? "AgentEnvelope signature, public record and exact Action Envelope scope passed; a legitimacy reference is present." : scope.reason,
-    checkedAt: DEMO_TIME,
-    commandHash: contentHash(payload),
-    signature,
-    signerAddress: record?.agentAddress ?? seedAddress(attackerSeed),
-    recordId: record?.recordId ?? null,
-    actionEnvelopeHash: record?.actionEnvelopeHash ?? null,
-    checks: {
-      identity: verification.valid,
-      authority: Boolean(record),
-      operationScope: scope.valid,
-      legitimacy: Boolean(record),
-    },
-  };
-  return {
-    ...body,
-    evidenceHash: contentHash(body),
-    evidenceSignature: signAction(decisionSeed, body),
-    evidenceSigner: seedAddress(decisionSeed),
-  };
-}
-
-function executionOutcome(payload, evidence) {
-  const body = {
-    type: "coldchain.simulatorExecutionOutcome",
-    version: 1,
-    commandId: payload.commandId,
-    decisionId: evidence.decisionId,
-    status: "completed",
-    completedAt: DEMO_TIME,
-    effect: payload.value === null ? payload.operation : `${payload.operation}:${payload.value}${payload.unit ?? ""}`,
-  };
-  return {
-    ...body,
-    outcomeHash: contentHash(body),
-    outcomeSignature: signAction(controllerSeed, body),
-    outcomeSigner: seedAddress(controllerSeed),
-  };
-}
-
-function runScenario(scenarioId) {
-  const scenario = scenarios.find((candidate) => candidate.id === scenarioId) ?? scenarios[0];
-  const payload = commandPayload(scenario);
-  const authority = scenario.authorityId ? authorities[scenario.authorityId] : null;
+// Fresh bounded demo authority; this is NOT a hosted mint.
+function createCommand(scenarioId, { now = Date.now(), commandId = crypto.randomUUID(), validityMs = 300_000 } = {}) {
+  const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
+  if (!scenario) throw new Error("Unknown cold-chain scenario");
+  const payload = commandPayload(scenario, commandId, now);
+  const authority = scenario.authorityId
+    ? createAuthority(authorityDefinitions[scenario.authorityId], { now, commandId, validityMs })
+    : null;
   const signature = authority ? signWithCapability(authority.capability, payload) : signAction(attackerSeed, payload);
-  const record = authority?.record ?? null;
+  // Private action seeds are not persisted with the command.
+  return { scenario, payload, signature, record: authority?.record ?? null };
+}
+
+function evaluateCommand(packet, { legitimacy = { status: "suspended", version: 0 }, uses = 0 } = {}) {
+  const { payload, signature, record } = packet;
   const verification = record
-    ? verifyRecord(record, {
-        payload,
-        signature,
-        actionIndex: record.actionEnvelope.actionIndex,
-        expectedActionEnvelopeHash: record.actionEnvelopeHash,
-      })
+    ? verifyRecord(record, { payload, signature, actionIndex: record.actionEnvelope.actionIndex, expectedActionEnvelopeHash: record.actionEnvelopeHash })
     : verifyAction({ message: payload, signature, expectedAddress: domain.domainAddress });
   const scope = verifyAgentEnvelopeScope(record, payload);
-  const decision = verification.valid && scope.valid ? "allowed" : "denied";
-  const evidence = decisionEvidence({ scenario, payload, signature, record, verification, scope, decision });
-  const outcome = decision === "allowed" ? executionOutcome(payload, evidence) : null;
+  // CLIENT operational policy, not an additional SDK guarantee.
+  const legitimate = Boolean(record) && legitimacy.status === "legitimate";
+  const maxUses = record?.actionEnvelope?.limits?.maxUses;
+  const useAvailable = Number.isInteger(maxUses) && uses < maxUses;
+  const reason = !record ? { code: scope.reasonCode, message: scope.reason } : !verification.valid
+    ? { code: "authority.invalid", message: verification.reason || "Signature or envelope verification failed." }
+    : !scope.valid ? { code: scope.reasonCode, message: scope.reason }
+    : !legitimate ? { code: "client.legitimacy_denied", message: "The current local operational policy is suspended; no execution." }
+    : !useAvailable ? { code: "client.max_uses_exhausted", message: "This authority's execution allowance is already reserved or consumed." }
+    : { code: "client.admitted", message: "SDK verification and client scope, current local legitimacy, and remaining-use checks passed." };
+  return makeDecision({
+    ...packet, verification, scope, legitimacy: { ...legitimacy, allowed: legitimate },
+    useAvailable, outcome: null, executionStatus: "not-started",
+  }, reason.code === "client.admitted" ? "allowed" : "denied", reason.code, reason.message);
+}
 
-  return {
-    scenario,
-    payload,
-    signature,
-    record,
-    verification,
-    scope,
-    decision,
-    evidence,
-    outcome,
-    temperature: decision === "allowed" ? scenario.finalTemperature : scenario.initialTemperature,
+function makeDecision(result, decision, reasonCode, reason) {
+  const { payload, record, signature } = result;
+  const body = {
+    type: "coldchain.decisionEvidence", version: 1,
+    decisionId: "AE-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase(),
+    commandId: payload.commandId, decision, reasonCode, reason,
+    checkedAt: new Date().toISOString(),
+    commandHash: contentHash(payload), signature,
+    signerAddress: record?.agentAddress ?? seedAddress(attackerSeed),
+    recordId: record?.recordId ?? null, actionEnvelopeHash: record?.actionEnvelopeHash ?? null,
+    legitimacyVersion: result.legitimacy?.version ?? null,
+    checks: result.checksDeferred ? {} : {
+      identity: result.verification?.valid ?? false,
+      authority: Boolean(record),
+      operationScope: result.scope?.valid ?? false,
+      legitimacy: result.legitimacy?.allowed ?? false,
+      uses: result.useAvailable,
+    },
   };
+  return { ...result, decision, evidence: {
+    ...body, evidenceHash: contentHash(body),
+    evidenceSignature: signAction(decisionSeed, body), evidenceSigner: seedAddress(decisionSeed),
+  } };
+}
+
+function executionOutcome(packet, evidence) {
+  const { payload, record } = packet;
+  const body = {
+    type: "coldchain.simulatorExecutionOutcome", version: 1,
+    commandId: payload.commandId, recordId: record?.recordId ?? null,
+    commandHash: contentHash(payload), decisionId: evidence.decisionId,
+    status: "completed", completedAt: new Date().toISOString(),
+    effect: payload.value === null ? payload.operation : payload.operation + ":" + payload.value + (payload.unit ?? ""),
+  };
+  return { ...body, outcomeHash: contentHash(body), outcomeSignature: signAction(controllerSeed, body), outcomeSigner: seedAddress(controllerSeed) };
 }
 
 function witnessEntry(result, previousHash = null, sequence = 1) {
@@ -395,7 +389,11 @@ function witnessEntry(result, previousHash = null, sequence = 1) {
 export {
   authorities,
   domain,
-  runScenario,
+  createCommand,
+  evaluateCommand,
+  makeDecision,
+  executionOutcome,
+  verifyAgentEnvelopeScope,
   scenarios,
   witnessEntry,
 };

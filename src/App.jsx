@@ -28,16 +28,19 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { authorities, domain, runScenario, scenarios, witnessEntry } from "./coldChainAuthority.js";
+import { authorities, domain, scenarios } from "./coldChainAuthority.js";
 import {
   clearHostedConfig,
   hostedConfigStatus,
-  hostedResultStatus,
   hostedRoleSummaries,
   initialHostedConfig,
-  publishHostedColdChainResult,
+  prepareHostedCommand,
+  admitHostedCommand,
+  submitHostedCompletion,
   saveHostedConfig,
 } from "./coldChainHosted.js";
+
+import { createExecutor } from "./coldChainExecutor.js";
 
 const viewIds = new Set(["run", "authority", "evidence", "setup"]);
 const VIEW_KEY = "agent-envelope-cold-chain:view";
@@ -51,53 +54,110 @@ function initialView() {
 
 function App() {
   const [view, setView] = useState(initialView);
-  const [scenarioId, setScenarioId] = useState("normal");
-  const [result, setResult] = useState(null);
-  const [ledger, setLedger] = useState([]);
+  const executor = useRef(null);
+  if (!executor.current) executor.current = createExecutor({
+    storage: window.localStorage,
+    withLock: (work) => {
+      if (!navigator.locks) return Promise.reject(new Error("This demo requires Web Locks; execution is blocked in this browser."));
+      return navigator.locks.request("cold-chain-executor-v2", work);
+    },
+    hosted: { prepare: prepareHostedCommand, admit: admitHostedCommand, submit: submitHostedCompletion },
+  });
+  const [clientError, setClientError] = useState("");
+  const [snapshot, setSnapshot] = useState(() => {
+    try { return executor.current.snapshot(); }
+    catch { return { commands: {}, order: [], ledger: [], temperature: 4, legitimacy: { status: "suspended" } }; }
+  });
+  const [activeId, setActiveId] = useState(snapshot.order[0] ?? "");
+  const [scenarioId, setScenarioId] = useState(snapshot.commands[activeId]?.packet.scenario.id ?? "normal");
   const [running, setRunning] = useState(false);
-  const [temperature, setTemperature] = useState(4);
   const [phase, setPhase] = useState("paused");
+  const [mode, setMode] = useState("offline");
+  const [fault, setFault] = useState("none");
+  const [validityMs, setValidityMs] = useState(300_000);
   const [hostedConfig, setHostedConfig] = useState(() => initialHostedConfig());
-  const [hostedState, setHostedState] = useState(() => ({
-    ...hostedConfigStatus(initialHostedConfig()),
-    publishing: false,
-    records: [],
-    recordUrl: "",
-    ledgerUrl: "",
-  }));
   const timers = useRef(new Set());
-  const temperatureTick = useRef(0);
-  const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
-
-  function schedule(callback, delay) {
-    const timer = window.setTimeout(() => {
-      timers.current.delete(timer);
-      callback();
-    }, delay);
-    timers.current.add(timer);
-  }
+  const active = snapshot.commands[activeId];
+  const result = active?.lastResult ?? null;
+  const ledger = snapshot.ledger;
+  const temperature = snapshot.temperature;
+  const scenario = scenarios.find(item => item.id === scenarioId) ?? scenarios[0];
+  const displayedMode = active?.mode ?? mode;
+  const hostedState = {
+    ...hostedConfigStatus(hostedConfig),
+    label: displayedMode === "offline" ? "offline" : active?.reportError ? "report pending" : active?.hosted?.outcomeReceipt ? "recorded" : active?.hosted?.report?.valid ? "admitted" : "approval required",
+    message: displayedMode === "offline" ? "Local SDK verification plus client execution policy. No hosted calls."
+      : active?.reportError ? "Execution completed; reporting remains pending: " + active.reportError
+      : active?.hosted?.outcomeReceipt ? "Completion report accepted. See the receipt for witness and MIR status."
+      : "Hosted mint, registration and current verification must succeed before the simulated effect.",
+    publishing: phase === "verifying" && displayedMode === "hosted",
+    records: active?.hosted?.outcomeReceipt ? [{
+      roleLabel: active.hosted.roleLabel, record: active.packet.record,
+      report: active.hosted.report, outcomeReceipt: active.hosted.outcomeReceipt,
+    }] : [],
+    recordUrl: active?.hosted?.registered ? "https://agentenvelope.io/records/" + active.packet.record.recordId : "",
+    ledgerUrl: active?.hosted?.registered ? "https://agentenvelope.io/ledger?tab=activity" : "",
+  };
 
   function clearScheduledWork() {
-    timers.current.forEach((timer) => window.clearTimeout(timer));
+    timers.current.forEach(timer => window.clearTimeout(timer));
     timers.current.clear();
   }
-
   useEffect(() => () => clearScheduledWork(), []);
-
   useEffect(() => {
-    if (!running || phase !== "monitoring") return undefined;
-    const offsets = [0, 0.1, 0, -0.1, 0.2, 0, -0.2];
-    const interval = window.setInterval(() => {
-      setTemperature((current) => {
-        if (current > 4.2) return Number(Math.max(4, current - 0.2).toFixed(1));
-        if (current < 3.8) return Number(Math.min(4, current + 0.2).toFixed(1));
-        temperatureTick.current = (temperatureTick.current + 1) % offsets.length;
-        return Number((4 + offsets[temperatureTick.current]).toFixed(1));
-      });
-    }, 900);
-    return () => window.clearInterval(interval);
-  }, [running, phase]);
-
+    const refresh = () => { try { setSnapshot(executor.current.snapshot()); } catch (error) { setClientError(error.message); } };
+    window.addEventListener("storage", refresh);
+    return () => window.removeEventListener("storage", refresh);
+  }, []);
+  function sync(id = activeId) {
+    const state = executor.current.snapshot();
+    setSnapshot(state);
+    setActiveId(id);
+    if (state.commands[id]) setScenarioId(state.commands[id].packet.scenario.id);
+    return state.commands[id]?.lastResult;
+  }
+  async function perform(work) {
+    clearScheduledWork();
+    setClientError("");
+    setPhase("verifying");
+    try {
+      const id = await work();
+      const next = sync(id);
+      setPhase(next?.decision === "denied" ? "denied" : next?.executionStatus === "completed" ? "allowed" : "monitoring");
+    } catch (error) {
+      setClientError(error.message);
+      try { sync(executor.current.snapshot().order[0] ?? ""); } catch {}
+      setPhase("monitoring");
+    }
+    const timer = window.setTimeout(() => { timers.current.delete(timer); setPhase("monitoring"); }, 700);
+    timers.current.add(timer);
+  }
+  function selectScenario(id) {
+    if (!running || phase === "verifying") return;
+    setScenarioId(id);
+    void perform(async () => {
+      const commandId = await executor.current.queue(id, { mode, validityMs });
+      setActiveId(commandId);
+      await executor.current.run(commandId, { fault, config: hostedConfig });
+      return commandId;
+    });
+  }
+  function resume() {
+    void perform(async () => {
+      await executor.current.run(activeId, { config: hostedConfig });
+      return activeId;
+    });
+  }
+  function retrieve() {
+    void perform(async () => {
+      await executor.current.receipt(activeId, { config: hostedConfig });
+      return activeId;
+    });
+  }
+  async function changeLegitimacy() {
+    await executor.current.setLegitimacy(snapshot.legitimacy.status === "legitimate" ? "suspended" : "legitimate");
+    sync();
+  }
   function changeView(next) {
     if (!viewIds.has(next)) return;
     setView(next);
@@ -106,155 +166,28 @@ function App() {
     url.searchParams.set("view", next);
     window.history.replaceState({}, "", url);
   }
-
-  function selectScenario(nextId) {
-    if (!running || phase !== "monitoring") return;
-    setScenarioId(nextId);
-    execute(nextId);
-  }
-
-  function execute(nextScenarioId = scenarioId) {
-    if (!running || phase === "verifying" || phase === "recovering") return;
-    const selected = scenarios.find((item) => item.id === nextScenarioId) ?? scenarios[0];
-    if (selected.id !== "attack") setTemperature(selected.initialTemperature);
-    setPhase("verifying");
-    schedule(() => {
-      const next = runScenario(selected.id);
-      setResult(next);
-      appendToLedger(next);
-      void publishHostedResult(next);
-      if (next.decision === "denied") {
-        setPhase("denied");
-        schedule(() => setPhase("monitoring"), 1800);
-        return;
-      }
-
-      setTemperature(next.temperature);
-      setPhase("allowed");
-      if (selected.id === "compressor") {
-        schedule(() => {
-          setPhase("recovering");
-          setScenarioId("authorised-recovery");
-          schedule(() => {
-            const recovery = runScenario("authorised-recovery");
-            setResult(recovery);
-            setTemperature(recovery.temperature);
-            appendToLedger(recovery);
-            void publishHostedResult(recovery);
-            setPhase("allowed");
-            schedule(() => setPhase("monitoring"), 1800);
-          }, 1200);
-        }, 1200);
-      } else {
-        schedule(() => setPhase("monitoring"), 1800);
-      }
-    }, 700);
-  }
-
-  function appendToLedger(next) {
-    setLedger((current) => {
-      const previousHash = current.at(0)?.entryHash ?? null;
-      const entry = witnessEntry(next, previousHash, current.length + 1);
-      return [{ ...entry, result: next }, ...current];
-    });
-  }
-
-  async function publishHostedResult(next) {
-    const readiness = hostedResultStatus(hostedConfig, next);
-    if (!readiness.ready) {
-      setHostedState((current) => ({
-        ...current,
-        ...readiness,
-        publishing: false,
-        recordUrl: "",
-        ledgerUrl: "",
-      }));
-      return;
-    }
-    setHostedState((current) => ({
-      ...current,
-      ready: true,
-      label: "publishing",
-      message: "Minting bounded authority and publishing the completed action...",
-      publishing: true,
-      recordUrl: "",
-      ledgerUrl: "",
-    }));
-    try {
-      const published = await publishHostedColdChainResult(hostedConfig, next);
-      setHostedState((current) => ({
-        ready: true,
-        label: "recorded",
-        message: `${published.roleLabel} was registered, verified and recorded as completed.`,
-        publishing: false,
-        records: [published, ...current.records].slice(0, 5),
-        recordUrl: published.links.record,
-        ledgerUrl: published.links.ledger,
-      }));
-    } catch (error) {
-      setHostedState((current) => ({
-        ...current,
-        ready: true,
-        label: "failed",
-        message: error instanceof Error ? error.message : "Hosted publication failed.",
-        publishing: false,
-        recordUrl: "",
-        ledgerUrl: "",
-      }));
-    }
-  }
-
-  function updateHostedConfig(patch) {
-    setHostedConfig((current) => {
-      const next = { ...current, ...patch };
-      setHostedState((state) => ({
-        ...state,
-        ...hostedConfigStatus(next),
-        publishing: false,
-        recordUrl: "",
-        ledgerUrl: "",
-      }));
-      return next;
-    });
-  }
-
-  function saveHostedSession() {
-    saveHostedConfig(hostedConfig);
-    setHostedState((current) => ({ ...current, ...hostedConfigStatus(hostedConfig), publishing: false }));
-  }
-
-  function clearHostedSession() {
-    clearHostedConfig();
-    const next = initialHostedConfig();
-    setHostedConfig(next);
-    setHostedState({
-      ...hostedConfigStatus(next),
-      publishing: false,
-      records: [],
-      recordUrl: "",
-      ledgerUrl: "",
-    });
-  }
-
-  function reset() {
+  function updateHostedConfig(patch) { setHostedConfig(current => ({ ...current, ...patch })); }
+  function saveHostedSession() { saveHostedConfig(hostedConfig); }
+  function clearHostedSession() { clearHostedConfig(); setHostedConfig(initialHostedConfig()); }
+  async function reset() {
+    if (phase === "verifying") return;
+    if (!window.confirm("Clear local demo commands, receipts and evidence? This does NOT reset hosted budgets or revoke hosted authority.")) return;
     clearScheduledWork();
-    setScenarioId("normal");
-    setResult(null);
-    setLedger([]);
-    setRunning(false);
-    setTemperature(4);
-    setPhase("paused");
+    await executor.current.reset();
+    setSnapshot(executor.current.snapshot());
+    setActiveId(""); setScenarioId("normal"); setRunning(false); setPhase("paused"); setClientError("");
   }
-
-  function startSystem() {
-    setRunning(true);
-    setTemperature(4);
-    setPhase("monitoring");
-  }
+  function startSystem() { setRunning(true); setPhase("monitoring"); }
+  const controls = {
+    mode, setMode, fault, setFault, validityMs, setValidityMs, snapshot, activeId,
+    onSelect: id => sync(id), onResume: resume, onReceipt: retrieve,
+    onLegitimacy: () => { void changeLegitimacy().catch(error => setClientError(error.message)); },
+    clientError,
+  };
 
   return (
     <main className="app-shell">
-      <Toolbar view={view} running={running} onViewChange={changeView} onReset={reset} />
+      <Toolbar view={view} running={running} onStart={startSystem} onViewChange={changeView} onReset={() => { void reset().catch(error => setClientError(error.message)); }} />
       {view === "run" && (
         <RunWorkspace
           scenario={scenario}
@@ -269,6 +202,7 @@ function App() {
             state: hostedState,
             roles: hostedRoleSummaries(hostedConfig),
           }}
+          controls={controls}
           onStart={startSystem}
           onSelectScenario={selectScenario}
         />
@@ -288,13 +222,70 @@ function App() {
       <footer>
         <span>AgentEnvelope Cold Chain</span>
         <span className="footer-separator">•</span>
-        <span>Deterministic authority admission and tamper-evident evidence</span>
+        <span>SDK authority checks + client execution policy · simulated equipment</span>
       </footer>
     </main>
   );
 }
 
-function Toolbar({ view, running, onViewChange, onReset }) {
+function executionLabel(result) {
+  if (result.outcome) return "Completed in simulator";
+  return ({
+    queued: "Not read — queued",
+    received: "Read — not started",
+    unknown: "Outcome unknown — halted",
+    "receipt-missing": "Receipt missing — retrieve, do not repeat",
+    completed: "Already completed — execution refused",
+    "not-started": "Not attempted",
+  })[result.executionStatus] ?? "Not attempted";
+}
+
+function ExecutionControls({ controls: c, busy, running }) {
+  const active = c.snapshot.commands[c.activeId];
+  return (
+    <section className="panel execution-controls">
+      <PanelHeading icon={ServerCog} eyebrow="Client responsibilities" title="Execution and recovery lab" />
+      <p>Each event issues a new demo command and loads its incident temperature. Mode, break point and validity apply to new commands only. Run selected retries the original; receipt retrieval never executes it.</p>
+      <label>Execution mode<select aria-label="Execution mode" value={c.mode} disabled={busy} onChange={e => c.setMode(e.target.value)}>
+        <option value="offline">Offline SDK + local client policy</option>
+        <option value="hosted">Hosted approval required</option>
+      </select></label>
+      <label>Break point<select aria-label="Break point" value={c.fault} disabled={busy} onChange={e => c.setFault(e.target.value)}>
+        <option value="none">No interruption</option>
+        <option value="before-read">Before read — keep queued</option>
+        <option value="after-read">After read — not started</option>
+        <option value="before-effect">After reservation — before effect</option>
+        <option value="after-effect">After effect — before receipt saved</option>
+        <option value="receipt-lost">After receipt saved — reply lost</option>
+      </select></label>
+      <label>Command validity<select aria-label="Command validity" value={c.validityMs} disabled={busy} onChange={e => c.setValidityMs(Number(e.target.value))}>
+        <option value={300000}>5 minutes</option><option value={5000}>5 seconds — expiry test</option>
+      </select></label>
+      <p className="local-policy">Local policy: <strong>{c.snapshot.legitimacy.status}</strong> · version {c.snapshot.legitimacy.version}</p>
+      <button type="button" disabled={busy} onClick={c.onLegitimacy}>{c.snapshot.legitimacy.status === "legitimate" ? "Suspend local legitimacy" : "Restore local legitimacy"}</button>
+      <label>Stored commands<select aria-label="Stored commands" disabled={busy || !c.snapshot.order.length} value={c.activeId} onChange={e => c.onSelect(e.target.value)}>
+        {!c.snapshot.order.length && <option value="">No commands</option>}
+        {c.snapshot.order.map(id => <option key={id} value={id}>{c.snapshot.commands[id].packet.scenario.shortLabel} · {id.slice(0, 8)} · {c.snapshot.commands[id].stage}</option>)}
+      </select></label>
+      {active && <dl className="facts">
+        <Fact label="Command ID" value={c.activeId} mono />
+        <Fact label="Recorded state" value={active.stage} />
+        <Fact label="Simulated effects" value={String(active.effectCount)} />
+        <Fact label="Command mode" value={active.mode} />
+        <Fact label="Expires" value={active.packet.record?.expiry ?? "No trusted authority"} />
+      </dl>}
+      <div className="execution-buttons">
+        <button type="button" disabled={busy || !running || !active} onClick={c.onResume}>Run selected command</button>
+        <button type="button" disabled={busy || !active} onClick={c.onReceipt}>Retrieve receipt / retry report</button>
+        <button type="button" disabled={busy} onClick={() => window.location.reload()}>Reload executor</button>
+      </div>
+      {c.clientError && <p role="alert">{c.clientError}</p>}
+      <small>Persistent single-origin browser simulation, serialized with Web Locks. Unknown outcomes halt this zone; Reset clears the local sandbox, not hosted budgets.</small>
+    </section>
+  );
+}
+
+function Toolbar({ view, running, onStart, onViewChange, onReset }) {
   const items = [
     ["run", Snowflake, "Cold chain run"],
     ["authority", KeyRound, "Authority map"],
@@ -318,6 +309,7 @@ function Toolbar({ view, running, onViewChange, onReset }) {
         ))}
       </nav>
       <div className="run-controls">
+        {!running && view === "run" && <button className="reset-button" type="button" onClick={onStart}><Play size={16} /> Start system</button>}
         <span className={`live-state ${running ? "running" : "paused"}`}><i />{running ? "Live" : "Stopped"}</span>
         <button className="reset-button" type="button" onClick={onReset}><RotateCcw size={16} /> Reset</button>
       </div>
@@ -325,11 +317,12 @@ function Toolbar({ view, running, onViewChange, onReset }) {
   );
 }
 
-function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperature, phase, hosted, onStart, onSelectScenario }) {
+function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperature, phase, hosted, controls, onStart, onSelectScenario }) {
   const busy = running && phase !== "monitoring";
   return (
     <section className="workspace">
       <aside className="side-panel left-panel">
+        <ExecutionControls controls={controls} busy={phase === "verifying"} running={running} />
         <section className="panel scenario-panel">
           <PanelHeading icon={AlertTriangle} eyebrow="Incident feed" title="Try an operational event" />
           <div className="scenario-list">
@@ -358,11 +351,7 @@ function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperatu
             {scenario.command.value !== null && <Fact label="Requested value" value={scenario.command.displayValue ?? `${scenario.command.value}°C`} />}
           </dl>
           <p>{scenario.summary}</p>
-          {!running ? (
-            <button className="run-button" type="button" onClick={onStart}>
-              <Play size={18} fill="currentColor" /> Start system
-            </button>
-          ) : (
+          {running && (
             <div className={`system-running-note ${busy ? "busy" : ""}`}>
               <Activity size={17} />{busy ? "Event in progress…" : "System live — select an event above"}
             </div>
@@ -371,7 +360,7 @@ function RunWorkspace({ scenario, scenarioId, result, ledger, running, temperatu
 
         <details className="panel boundary-panel">
           <summary><LockKeyhole size={17} /> Enforcement boundary <ChevronDown size={16} /></summary>
-          <p>The simulated controller accepts commands only through this verifier. Network isolation, patched firmware and protected management access remain required.</p>
+          <p>The demo client enforces scope, current local policy and durable use reservations around SDK verification. Browser storage and demo keys are not production custody. Hosted mode adds online approval before execution.</p>
         </details>
       </aside>
 
@@ -395,13 +384,14 @@ function AuthorityFlow({ result, phase, running }) {
   const allowed = result?.decision === "allowed";
   const denied = result?.decision === "denied";
   const verifying = phase === "verifying" || phase === "recovering";
+  const checked = result && !result.checksDeferred;
   const steps = [
-    [Fingerprint, "Identity", verifying ? "checking" : result ? (result.verification.valid ? "verified" : "failed") : "waiting"],
-    [KeyRound, "Authority", verifying ? "checking" : result ? (result.record ? "found" : "missing") : "waiting"],
-    [ShieldCheck, "Exact scope", verifying ? "checking" : result ? (result.scope.valid ? "matched" : "denied") : "waiting"],
+    [Fingerprint, "SDK verification", verifying ? "checking" : checked ? (result.verification.valid ? "verified" : "failed") : "waiting"],
+    [KeyRound, "Authority", verifying ? "checking" : checked ? (result.record ? "found" : "missing") : "waiting"],
+    [ShieldCheck, "Client scope", verifying ? "checking" : checked ? (result.scope.valid ? "matched" : "denied") : "waiting"],
     [ClipboardCheck, "Evidence", verifying ? "preparing" : result ? "recorded" : "waiting"],
   ];
-  const headline = !running ? "System paused" : verifying ? (phase === "recovering" ? "Authorising recovery" : "Verifying command") : result ? (allowed ? "Allowed" : "Denied") : "Gateway ready";
+  const headline = !running ? "System paused" : verifying ? "Verifying command" : result ? ({ allowed: "Allowed", denied: "Denied", paused: "Paused", recorded: "Historical receipt" })[result.decision] : "Gateway ready";
   return (
     <section className={`authority-flow ${!verifying && allowed ? "allowed" : ""} ${!verifying && denied ? "denied" : ""} ${verifying ? "verifying" : ""}`} aria-label="Command authority flow">
       <div className="flow-intro"><span>Command admission</span><strong>{headline}</strong></div>
@@ -418,12 +408,12 @@ function AuthorityFlow({ result, phase, running }) {
 }
 
 function ColdRoom({ scenario, result, temperature, phase, running }) {
-  const denied = phase === "denied";
-  const allowed = phase === "allowed";
+  const denied = result?.decision === "denied";
+  const allowed = result?.decision === "allowed";
   const verifying = phase === "verifying";
   const recovering = phase === "recovering";
   const severity = temperature > 8 ? "danger" : temperature > 5 ? "warning" : "safe";
-  const stateLabel = !running ? "System paused" : verifying ? "Evaluating command" : recovering ? "Authorised recovery" : denied ? "Command isolated" : allowed ? "Command admitted" : "Refrigeration active";
+  const stateLabel = !running ? "System paused" : verifying ? "Evaluating command" : result?.decision === "paused" ? "Execution paused" : result?.decision === "recorded" ? "Historical receipt" : denied ? "Command isolated" : allowed ? "Command completed" : "Simulator ready";
   const stateIcon = denied ? <XCircle size={17} /> : allowed ? <CheckCircle2 size={17} /> : <Activity size={17} />;
   const cabinetTemperatures = [temperature + 0.1, temperature - 0.2, temperature];
   return (
@@ -438,14 +428,14 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
         <div className="temperature-stack">
           <Thermometer size={31} />
           <strong>{formatTemperature(temperature)}°C</strong>
-          <span>Measured temperature</span>
+          <span>Simulated temperature</span>
           <div className="temperature-track"><i style={{ height: `${Math.min(100, Math.max(8, (temperature + 25) * 1.35))}%` }} /></div>
         </div>
         <div className="cabinet-bank">
           {["Chilled A", "Chilled B", "Chilled C"].map((label, index) => (
             <div className="cabinet" key={label}>
               <div className="cabinet-glass"><Snowflake size={22} /><span>{formatTemperature(cabinetTemperatures[index])}°</span></div>
-              <strong>{label}</strong><small>{index === 2 ? "Command target" : "Live sensor"}</small>
+              <strong>{label}</strong><small>{index === 2 ? "Command target" : "Simulated sensor"}</small>
             </div>
           ))}
         </div>
@@ -453,8 +443,8 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
           <div className="rack-title"><ServerCog size={20} /><span>AgentEnvelope gateway</span></div>
           <div className={`gateway-light ${denied ? "red" : allowed ? "green" : "amber"}`} />
           <dl>
-            <Fact label="Mode" value={!running ? "Paused" : denied ? "Fail closed" : recovering ? "Recovery admission" : verifying ? "Checking authority" : allowed ? "Executing" : "Admission guard"} />
-            <Fact label="Compressor" value={recovering ? "Recovery requested" : scenario.id === "compressor" && phase !== "monitoring" ? "Fault detected" : "Online"} />
+            <Fact label="Mode" value={verifying ? "Checking authority" : result?.outcome ? "Stored completion" : result?.executionStatus === "unknown" ? "Halted: uncertain outcome" : denied ? "Fail closed" : "Awaiting command"} />
+            <Fact label="Compressor" value={scenario.id === "compressor" ? "Fault scenario; dispatch is not repair" : "Simulated equipment"} />
             <Fact label="Defrost" value={result?.scenario.id === "authority-breakout-attempt" && denied ? "8-hour scope breakout blocked" : result?.scenario.id === "attack" && denied ? "Malicious request blocked" : "Scheduled only"} />
           </dl>
         </div>
@@ -463,7 +453,7 @@ function ColdRoom({ scenario, result, temperature, phase, running }) {
         {denied ? <CircleOff size={19} /> : allowed ? <Check size={19} /> : <RadioTower size={19} />}
         <div>
           <strong>{verifying ? "authority.verification_in_progress" : recovering ? "recovery.authority_requested" : result ? result.evidence.reasonCode : "Gateway ready"}</strong>
-          <span>{verifying ? "Checking signer, public authority record, exact resources and safety-relevant values." : recovering ? "The site-engineer restoration is being verified as a separate command." : result ? result.evidence.reason : "The refrigeration loop is live. Choose an event to submit a command."}</span>
+          <span>{verifying ? "SDK verification plus client checks of exact resources and safety-relevant values." : result ? result.evidence.reason : "Choose an event to submit a command to the simulator."}</span>
         </div>
       </div>
     </section>
@@ -495,7 +485,7 @@ function DecisionPanel({ result, phase }) {
   if (phase === "verifying" || phase === "recovering") return (
     <section className="panel decision-panel verifying">
       <PanelHeading icon={Gauge} eyebrow="Decision" title={phase === "recovering" ? "Authorising recovery" : "Verification in progress"} />
-      <p>{phase === "recovering" ? "A separately scoped site-engineer command must pass AgentEnvelope admission before the safe setpoint can be restored." : "AgentEnvelope is checking cryptographic identity, the public authority record and exact Action Envelope scope."}</p>
+      <p>The SDK checks the signed record and time window. The client checks refrigeration scope, current local policy and remaining uses; hosted mode also requires online approval.</p>
     </section>
   );
   if (!result) return (
@@ -507,13 +497,13 @@ function DecisionPanel({ result, phase }) {
   const allowed = result.decision === "allowed";
   return (
     <section className={`panel decision-panel ${result.decision}`}>
-      <PanelHeading icon={allowed ? CheckCircle2 : XCircle} eyebrow="Admission decision" title={allowed ? "Allowed" : "Denied"} />
+      <PanelHeading icon={allowed || result.decision === "recorded" ? CheckCircle2 : result.decision === "paused" ? CircleOff : XCircle} eyebrow={result.decision === "recorded" ? "Historical evidence" : "Admission decision"} title={result.decision === "recorded" ? "Receipt recovered" : result.decision === "paused" ? "Paused — no automatic retry" : allowed ? "Allowed" : "Denied"} />
       <div className="decision-id"><span>Decision ID</span><strong>{result.evidence.decisionId}</strong></div>
       <p>{result.evidence.reason}</p>
       {result.scenario.admissionNote && <div className="admission-limit"><TriangleAlert size={17} /><span>{result.scenario.admissionNote}</span></div>}
       <div className="execution-state">
         <span>Execution</span>
-        <strong>{result.outcome ? "Completed in simulator" : "Not attempted"}</strong>
+        <strong>{executionLabel(result)}</strong>
       </div>
     </section>
   );
@@ -522,14 +512,16 @@ function DecisionPanel({ result, phase }) {
 function ChecksPanel({ result, phase }) {
   const checks = phase === "verifying" || phase === "recovering" ? null : result?.evidence.checks;
   const rows = [
-    ["Identity signature", checks?.identity],
+    ["SDK signature, envelope and time", checks?.identity],
     ["Public authority record", checks?.authority],
     ["Exact operation, rules and resources", checks?.operationScope],
-    ["Legitimacy reference present", checks?.legitimacy],
+    ["Client operational legitimacy", checks?.legitimacy],
+    ["Client remaining-use check", checks?.uses],
   ];
   return (
     <section className="panel checks-panel">
       <PanelHeading icon={ShieldCheck} eyebrow="Verification" title="Authority checks" />
+      {result?.decision === "recorded" && <p>Receipt retrieval does not check or renew execution authority. Prior decisions remain in the evidence timeline.</p>}
       <div className="check-list">
         {rows.map(([label, state]) => (
           <div key={label} className={state === undefined ? "waiting" : state ? "pass" : "fail"}>
@@ -552,7 +544,7 @@ function EvidenceCard({ result }) {
           <Fact label="Record" value={result.record?.recordId ?? "No matching record"} mono />
           <Fact label="Evidence hash" value={shortHash(result.evidence.evidenceHash)} mono />
           <Fact label="Demo decision signer" value={shortHash(result.evidence.evidenceSigner)} mono />
-          <Fact label="Outcome" value={result.outcome ? shortHash(result.outcome.outcomeHash) : "None — denied before execution"} mono={Boolean(result.outcome)} />
+          <Fact label="Outcome" value={result.outcome ? shortHash(result.outcome.outcomeHash) : executionLabel(result)} mono={Boolean(result.outcome)} />
         </dl>
       )}
     </details>
@@ -568,7 +560,7 @@ function HostedRecordsPanel({ hosted }) {
       <PanelHeading icon={Link2} eyebrow="Hosted lifecycle" title="Portal records" />
       <div className="hosted-state-row">
         <span className={`hosted-state-pill ${className}`}>{state.publishing ? "publishing" : state.label}</span>
-        <strong>{state.ready ? "Connected path" : "Local simulation"}</strong>
+        <strong>{state.label === "offline" ? "Local simulation" : state.ready ? "Hosted mode selected" : "Hosted setup required"}</strong>
       </div>
       <p>{state.message}</p>
       {latest && (
@@ -576,7 +568,7 @@ function HostedRecordsPanel({ hosted }) {
           <Fact label="Authority" value={latest.roleLabel} />
           <Fact label="Record" value={shortHash(latest.record.recordId)} mono />
           <Fact label="Verification" value={latest.report.valid ? "allowed" : "denied"} />
-          <Fact label="Completion" value={latest.outcomeReceipt.accepted ? "witnessed" : "not recorded"} />
+          <Fact label="Completion" value={latest.outcomeReceipt.witness ? "witness receipt returned" : latest.outcomeReceipt.accepted ? "report accepted; no witness proof returned" : "not recorded"} />
         </dl>
       )}
       {(state.recordUrl || state.ledgerUrl) && (
@@ -593,7 +585,7 @@ function HostedRecordsPanel({ hosted }) {
 function AuthorityView() {
   return (
     <section className="page-view">
-      <PageHero eyebrow="Sovereign authority" title="One Domain. Five deliberately separate authorities." body="Monitoring can observe and alert. Maintenance can dispatch. Site control can restore a safe setpoint or run only the exact defrost schedule in its separately derived authority. Knowing the right value never grants control authority—and a known signer cannot break out of scope." />
+      <PageHero eyebrow="Sovereign authority" title="One Domain. Five scoped authority templates." body="Monitoring can observe and alert. Maintenance can dispatch. Site control can restore a safe setpoint or run only the exact defrost schedule in its separately derived authority. Knowing the right value never grants control authority—and a known signer cannot break out of scope." />
       <div className="authority-summary">
         <section className="domain-card">
           <span>Domain</span><h2>Store 184 refrigeration</h2>
@@ -607,7 +599,7 @@ function AuthorityView() {
               <div className="authority-icon"><UserRoundCheck size={20} /></div>
               <span>{definition.label}</span><h3>{definition.operation}</h3>
               <p>{definition.resources.join(" · ")}</p>
-              <dl><Fact label="Agent" value={shortHash(record.agentAddress)} mono /><Fact label="Record" value={record.recordId} mono /></dl>
+              <dl><Fact label="Agent" value={shortHash(record.agentAddress)} mono /><Fact label="Record" value="Preview only; each event issues fresh bounded demo authority" /></dl>
             </article>
           ))}
         </div>
@@ -620,21 +612,21 @@ function AuthorityView() {
 function EvidenceView({ ledger, onRun }) {
   return (
     <section className="page-view">
-      <PageHero eyebrow="Incident evidence" title="A decision trail, not an editable story." body="Every command submitted through the trusted gateway creates signed decision evidence. Allowed commands add a separate simulator outcome, keeping admission distinct from execution. The hosted path can add AgentEnvelope witness blocks and configured external verification." />
+      <PageHero eyebrow="Incident evidence" title="Admission and completion are separate evidence." body="The demo records command attempts and delivery interruptions. A completed simulation adds a separate receipt; admission alone does not prove completion. Local demo keys and browser storage are not independent or tamper-resistant evidence." />
       {ledger.length === 0 ? (
         <section className="large-empty"><DatabaseZap size={34} /><h2>No incident evidence yet</h2><p>Run one or more scenarios to build the local hash-linked evidence chain.</p><button type="button" onClick={onRun}>Open cold-chain run</button></section>
       ) : (
         <div className="evidence-table-wrap">
           <table className="evidence-table">
             <thead><tr><th>#</th><th>Scenario</th><th>Decision</th><th>Decision ID</th><th>Reason</th><th>Execution</th><th>Chain hash</th></tr></thead>
-            <tbody>{ledger.map((entry) => <tr key={entry.entryHash}><td>{entry.sequence}</td><td>{entry.result.scenario.title}</td><td><StatusPill value={entry.result.decision} /></td><td className="mono">{entry.result.evidence.decisionId}</td><td>{entry.result.evidence.reasonCode}</td><td>{entry.result.outcome ? "completed" : "not attempted"}</td><td className="mono">{shortHash(entry.entryHash)}</td></tr>)}</tbody>
+            <tbody>{ledger.map((entry) => <tr key={entry.entryHash}><td>{entry.sequence}</td><td>{entry.result.scenario.title}</td><td><StatusPill value={entry.result.decision} /></td><td className="mono">{entry.result.evidence.decisionId}</td><td>{entry.result.evidence.reasonCode}</td><td>{executionLabel(entry.result)}</td><td className="mono">{shortHash(entry.entryHash)}</td></tr>)}</tbody>
           </table>
         </div>
       )}
       <div className="evidence-limitations">
         <section className="evidence-boundary"><TriangleAlert size={21} /><div><strong>Command boundary</strong><p>A denied command proves the gateway rejected that submitted attempt. It cannot record a path that bypasses the gateway entirely.</p></div></section>
         <section className="evidence-boundary"><RadioTower size={21} /><div><strong>Observation boundary</strong><p>This chain records what arrived. It does not prove that an expected temperature reading arrived on schedule; silence and a quiet night remain indistinguishable here.</p></div></section>
-        <section className="evidence-boundary"><UserRoundCheck size={21} /><div><strong>Hosted witness path</strong><p>The demo runs locally by default. When portal delegates and credentials are configured, allowed commands are minted, registered and verified through AgentEnvelope before their signed completion is submitted to the hosted outcome route. Configured witnessing and MIR processing remain backend concerns.</p></div></section>
+        <section className="evidence-boundary"><UserRoundCheck size={21} /><div><strong>Hosted witness path</strong><p>The demo runs locally by default. In explicitly selected hosted mode, commands must be minted, registered and verified through AgentEnvelope before simulation. Completed receipts are submitted separately; reporting failure never re-executes a command. Configured witnessing and MIR processing remain backend concerns.</p></div></section>
       </div>
     </section>
   );
@@ -676,7 +668,7 @@ function SetupView({ hostedConfig, hostedState, hostedRoles, onHostedChange, onH
       <div className="setup-grid">{stages.map(([number, title, body]) => <article key={number}><span>{number}</span><div><h2>{title}</h2><p>{body}</p></div></article>)}</div>
       <section className="hosted-setup">
         <div className="hosted-setup-heading">
-          <div><span>Optional hosted demonstration</span><h2>Connect portal-created agents</h2><p>The simulator remains local until all three signed delegate handoffs and hosted credentials are present. Values entered here are kept only for this browser session.</p></div>
+          <div><span>Optional hosted demonstration</span><h2>Connect portal-created agents</h2><p>Offline mode is the default even with credentials configured. Select Hosted approval explicitly in the run controls to require online admission before execution. Credentials entered here are kept only for this browser session.</p></div>
           <a href="https://agentenvelope.io/agents" target="_blank" rel="noreferrer">Open Agent Authority</a>
         </div>
         <div className="hosted-config-grid">
